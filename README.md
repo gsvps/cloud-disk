@@ -22,6 +22,16 @@
 
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/gsvps/cloud-disk)
 
+> **若提示「已存在具有该名称的存储库」**  
+> 一键部署会在你的 GitHub 账号下**新建一个 fork 仓库**，默认名称与源仓库相同（`cloud-disk`）。若你已有同名仓库（例如已是 `gsvps/cloud-disk` 的维护者），请在部署页把 **Git 仓库名称** 改成其他名字，例如：
+> - `cloud-disk-app`
+> - `my-cloud-disk`
+>
+> Worker 名称、D1/KV/R2 仍可保持 `cloud-disk` 系列默认值，**不必与 Git 仓库名相同**。
+
+> **若你已有该源码仓库，想直接部署（不 fork）**  
+> 可跳过一键按钮，在 [Cloudflare Dashboard](https://dash.cloudflare.com/) → **Workers & Pages** → **Create** → 连接 GitHub 仓库 `gsvps/cloud-disk`，按 `wrangler.toml` 配置资源后部署即可。
+
 点击按钮后，Cloudflare 会读取 `wrangler.toml` 并**自动创建** D1、KV、R2 资源。默认命名如下（KV 与 R2 不可同名，已做区分）：
 
 | 资源 | 默认名称 | 说明 |
