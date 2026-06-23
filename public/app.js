@@ -1,5 +1,5 @@
 const API = '/api';
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const SITE = {
   github: 'https://github.com/gsvps/cloud-disk',
   website: 'https://www.gsvps.com',

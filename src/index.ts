@@ -13,7 +13,7 @@ const app = new Hono<{ Bindings: Env }>();
 app.get('/api/health', (c) =>
   c.json({
     success: true,
-    data: { status: 'ok', app: c.env.APP_NAME || 'CloudDisk', version: '1.1.0' },
+    data: { status: 'ok', app: c.env.APP_NAME || 'CloudDisk', version: '1.2.0' },
   })
 );
 
