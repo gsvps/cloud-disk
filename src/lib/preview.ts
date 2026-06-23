@@ -1,6 +1,45 @@
 const TEXT_MAX_EDIT_BYTES = 2 * 1024 * 1024;
 
-export function isPreviewable(mimeType: string | null, filename: string): boolean {
+const OFFICE_EXTENSIONS = new Set([
+  'doc',
+  'docx',
+  'xls',
+  'xlsx',
+  'ppt',
+  'pptx',
+  'odt',
+  'ods',
+  'odp',
+]);
+
+const OFFICE_MIMES = new Set([
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'application/vnd.oasis.opendocument.presentation',
+]);
+
+export type PreviewMode = 'direct' | 'office' | null;
+
+export function isOfficeDocument(mimeType: string | null, filename: string): boolean {
+  const mime = mimeType || guessMime(filename);
+  if (OFFICE_MIMES.has(mime)) return true;
+  const ext = filename.split('.').pop()?.toLowerCase();
+  return ext ? OFFICE_EXTENSIONS.has(ext) : false;
+}
+
+export function getPreviewMode(mimeType: string | null, filename: string): PreviewMode {
+  if (isOfficeDocument(mimeType, filename)) return 'office';
+  if (isDirectPreviewable(mimeType, filename)) return 'direct';
+  return null;
+}
+
+function isDirectPreviewable(mimeType: string | null, filename: string): boolean {
   const mime = mimeType || guessMime(filename);
   if (mime.startsWith('image/')) return true;
   if (mime.startsWith('video/')) return true;
@@ -10,6 +49,10 @@ export function isPreviewable(mimeType: string | null, filename: string): boolea
   if (mime === 'application/json') return true;
   if (mime === 'application/javascript') return true;
   return false;
+}
+
+export function isPreviewable(mimeType: string | null, filename: string): boolean {
+  return getPreviewMode(mimeType, filename) !== null;
 }
 
 export function isEditable(mimeType: string | null, filename: string, size: number): boolean {
@@ -45,8 +88,21 @@ export function guessMime(filename: string): string {
     ts: 'text/typescript',
     css: 'text/css',
     html: 'text/html',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    odt: 'application/vnd.oasis.opendocument.text',
+    ods: 'application/vnd.oasis.opendocument.spreadsheet',
+    odp: 'application/vnd.oasis.opendocument.presentation',
   };
   return (ext && map[ext]) || 'application/octet-stream';
+}
+
+export function getOfficeEmbedUrl(publicFileUrl: string): string {
+  return `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(publicFileUrl)}`;
 }
 
 export function contentDisposition(filename: string, inline: boolean): string {

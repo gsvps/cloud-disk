@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { and, desc, eq } from 'drizzle-orm';
 import type { Env } from '../env';
 import { createDb } from '../db';
-import { shares } from '../db/schema';
+import { files, shares } from '../db/schema';
 import { generateId, hashPassword } from '../lib/crypto';
 import { getFileAccess } from '../lib/file-access';
 import { jsonFail, jsonOk } from '../lib/response';
@@ -13,13 +13,20 @@ const sharesRouter = new Hono<{ Bindings: Env; Variables: AuthVariables }>();
 
 sharesRouter.use('*', authMiddleware);
 
-function toShareDto(share: typeof shares.$inferSelect, origin: string) {
+function toShareDto(
+  share: typeof shares.$inferSelect,
+  origin: string,
+  file?: typeof files.$inferSelect
+) {
+  const isFolder = file?.isFolder ?? false;
   return {
     id: share.id,
     fileId: share.fileId,
+    fileName: file?.name ?? null,
+    isFolder,
     token: share.token,
     url: `${origin}/s/${share.token}`,
-    directUrl: share.directLink ? `${origin}/api/share/${share.token}/download` : null,
+    directUrl: share.directLink && !isFolder ? `${origin}/api/share/${share.token}/download` : null,
     hasPassword: !!share.passwordHash,
     expiresAt: share.expiresAt?.toISOString() ?? null,
     allowPreview: share.allowPreview,
@@ -36,13 +43,14 @@ sharesRouter.get('/', async (c) => {
   const user = c.get('user');
   const db = createDb(c.env.DB);
   const rows = await db
-    .select()
+    .select({ share: shares, file: files })
     .from(shares)
+    .innerJoin(files, eq(shares.fileId, files.id))
     .where(eq(shares.userId, user.userId))
     .orderBy(desc(shares.createdAt));
 
   const origin = new URL(c.req.url).origin;
-  return jsonOk(c, { shares: rows.map((s) => toShareDto(s, origin)) });
+  return jsonOk(c, { shares: rows.map(({ share, file }) => toShareDto(share, origin, file)) });
 });
 
 sharesRouter.post('/', async (c) => {
@@ -62,11 +70,11 @@ sharesRouter.post('/', async (c) => {
 
   const db = createDb(c.env.DB);
   const access = await getFileAccess(db, user.userId, body.fileId);
-  if (!access || access.file.isFolder) {
+  if (!access) {
     return jsonFail(c, 'NOT_FOUND', '文件不存在', 404);
   }
   if (access.permission !== 'owner') {
-    return jsonFail(c, 'FORBIDDEN', '仅文件所有者可创建分享', 403);
+    return jsonFail(c, 'FORBIDDEN', '仅所有者可创建分享', 403);
   }
 
   let expiresAt: Date | null = null;
@@ -75,7 +83,7 @@ sharesRouter.post('/', async (c) => {
   }
 
   const password = body.password?.trim();
-  const directLink = !!body.directLink && !password;
+  const directLink = !!body.directLink && !password && !access.file.isFolder;
 
   const id = generateId();
   const token = generateShareToken();
@@ -98,7 +106,7 @@ sharesRouter.post('/', async (c) => {
 
   const [share] = await db.select().from(shares).where(eq(shares.id, id)).limit(1);
   const origin = new URL(c.req.url).origin;
-  return jsonOk(c, { share: toShareDto(share!, origin) });
+  return jsonOk(c, { share: toShareDto(share!, origin, access.file) });
 });
 
 sharesRouter.delete('/:id', async (c) => {

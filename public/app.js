@@ -14,6 +14,9 @@ const state = {
   modal: null,
   sharePage: null,
   shareAccessToken: null,
+  shareFolderBreadcrumbs: [],
+  shareFiles: [],
+  sharePreviewFile: null,
 };
 
 async function api(path, options = {}) {
@@ -231,9 +234,21 @@ function downloadFile(id) {
   window.open(`${API}/files/${id}/download`, '_blank');
 }
 
-function openShareModal(id, name) {
-  state.modal = { type: 'share', fileId: id, fileName: name };
+function openShareModal(id, name, isFolder) {
+  state.modal = { type: 'share', fileId: id, fileName: name, isFolder: !!isFolder };
   render();
+}
+
+function renderPreviewBody(info, mime) {
+  if (info.mode === 'office') {
+    return `<iframe src="${esc(info.embedUrl)}" class="h-[70vh] w-full"></iframe>`;
+  }
+  const url = info.url;
+  if ((mime || '').startsWith('image/')) return `<img src="${url}" class="max-h-[70vh] w-full object-contain" />`;
+  if ((mime || '').startsWith('video/')) return `<video src="${url}" controls class="w-full"></video>`;
+  if ((mime || '').startsWith('audio/')) return `<audio src="${url}" controls class="w-full"></audio>`;
+  if (mime === 'application/pdf') return `<iframe src="${url}" class="h-[70vh] w-full"></iframe>`;
+  return `<iframe src="${url}" class="h-[70vh] w-full"></iframe>`;
 }
 
 function openCollabModal(id, name) {
@@ -250,8 +265,20 @@ function openCollabModal(id, name) {
 }
 
 function openPreviewModal(id, name, mime) {
-  state.modal = { type: 'preview', fileId: id, fileName: name, mime };
+  state.modal = { type: 'preview', fileId: id, fileName: name, mime, loading: true };
   render();
+  api(`/files/${id}/preview-info`)
+    .then((d) => {
+      if (state.modal?.fileId === id && state.modal?.type === 'preview') {
+        state.modal.previewInfo = d;
+        state.modal.loading = false;
+        render();
+      }
+    })
+    .catch((err) => {
+      alert(err.message);
+      closeModal();
+    });
 }
 
 function openEditModal(id, name) {
@@ -279,9 +306,9 @@ async function submitShare(form) {
       password: form.password.value || undefined,
       expiresInHours: Number(form.expires.value) || undefined,
       allowPreview: form.allowPreview.checked,
-      allowEdit: form.allowEdit.checked,
+      allowEdit: form.allowEdit?.checked ?? false,
       allowDownload: form.allowDownload.checked,
-      directLink: form.directLink.checked,
+      directLink: form.directLink?.checked ?? false,
       maxDownloads: form.maxDownloads.value ? Number(form.maxDownloads.value) : undefined,
     }),
   });
@@ -310,6 +337,43 @@ async function removeCollab(collaboratorId) {
   render();
 }
 
+async function loadShareFolderFiles(parentId) {
+  const params = parentId ? `?parentId=${encodeURIComponent(parentId)}` : '';
+  const data = await api(`/share/${state.sharePage}/files${params}`);
+  state.shareFiles = data.files;
+}
+
+async function openShareFolder(id, name) {
+  if (!state.shareFolderBreadcrumbs.length) {
+    state.shareFolderBreadcrumbs = [{ id: null, name: state.shareInfo.name }];
+  }
+  state.shareFolderBreadcrumbs.push({ id, name });
+  state.sharePreviewFile = null;
+  await loadShareFolderFiles(id);
+  render();
+}
+
+async function navigateShareFolder(index) {
+  state.shareFolderBreadcrumbs = state.shareFolderBreadcrumbs.slice(0, index + 1);
+  const parentId = state.shareFolderBreadcrumbs[index].id;
+  state.sharePreviewFile = null;
+  await loadShareFolderFiles(parentId);
+  render();
+}
+
+async function openShareFilePreview(file) {
+  state.sharePreviewFile = { ...file, loading: true };
+  render();
+  try {
+    const info = await api(`/share/${state.sharePage}/files/${file.id}/preview-info`);
+    state.sharePreviewFile = { ...file, previewInfo: info, loading: false };
+  } catch (err) {
+    state.sharePreviewFile = null;
+    alert(err.message);
+  }
+  render();
+}
+
 async function saveEditContent() {
   const ta = document.getElementById('edit-content');
   await api(`/files/${state.modal.fileId}/content`, {
@@ -332,6 +396,10 @@ async function initSharePage() {
       const access = await api(`/share/${token}/access`, { method: 'POST', body: '{}' });
       state.shareAccessToken = access.accessToken;
     }
+    if (!info.requiresPassword && info.isFolder) {
+      state.shareFolderBreadcrumbs = [{ id: null, name: info.name }];
+      await loadShareFolderFiles(null);
+    }
   } catch (err) {
     state.shareError = err.message;
   }
@@ -345,6 +413,10 @@ async function verifySharePassword(form) {
   });
   state.shareAccessToken = access.accessToken;
   state.shareNeedsPassword = false;
+  if (state.shareInfo?.isFolder) {
+    state.shareFolderBreadcrumbs = [{ id: null, name: state.shareInfo.name }];
+    await loadShareFolderFiles(null);
+  }
   render();
 }
 
@@ -372,9 +444,10 @@ function renderModal() {
         </select></div>
         <div><label class="label">下载次数上限（可选）</label><input class="input" name="maxDownloads" type="number" min="1" placeholder="不限" /></div>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="allowPreview" checked /> 允许预览</label>
-        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="allowEdit" /> 允许在线编辑</label>
+        ${m.isFolder ? '<p class="text-xs text-slate-500">文件夹分享可在分享页浏览子目录并下载文件</p>' : ''}
+        ${m.isFolder ? '' : '<label class="flex items-center gap-2 text-sm"><input type="checkbox" name="allowEdit" /> 允许在线编辑</label>'}
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="allowDownload" checked /> 允许下载</label>
-        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="directLink" /> 直链（无密码时可外链下载）</label>
+        ${m.isFolder ? '' : '<label class="flex items-center gap-2 text-sm"><input type="checkbox" name="directLink" /> 直链（无密码时可外链下载）</label>'}
         <div class="flex gap-2"><button type="button" class="btn-secondary flex-1" id="modal-close">取消</button><button type="submit" class="btn-primary flex-1">创建</button></div>
       </form>
     </div></div>`;
@@ -390,7 +463,10 @@ function renderModal() {
     return `<div class="modal-backdrop"><div class="modal">
       <h3 class="mb-3 text-lg font-semibold">协作 · ${esc(m.fileName)}</h3>
       <form id="collab-form" class="mb-4 space-y-2">
-        <input class="input" name="username" placeholder="用户名" required />
+        <div class="relative">
+          <input class="input" id="collab-username" name="username" placeholder="搜索用户名" required autocomplete="off" />
+          <div id="collab-suggestions" class="absolute z-10 mt-1 hidden max-h-40 w-full overflow-auto rounded-lg border bg-white shadow-lg"></div>
+        </div>
         <select class="input" name="permission"><option value="view">只读</option><option value="edit">可编辑</option></select>
         <button type="submit" class="btn-primary w-full">添加协作者</button>
       </form>
@@ -400,13 +476,10 @@ function renderModal() {
   }
 
   if (m.type === 'preview') {
-    const url = `${API}/files/${m.fileId}/preview`;
-    let body = '';
-    if ((m.mime || '').startsWith('image/')) body = `<img src="${url}" class="max-h-[70vh] w-full object-contain" />`;
-    else if ((m.mime || '').startsWith('video/')) body = `<video src="${url}" controls class="w-full"></video>`;
-    else if ((m.mime || '').startsWith('audio/')) body = `<audio src="${url}" controls class="w-full"></audio>`;
-    else if (m.mime === 'application/pdf') body = `<iframe src="${url}" class="h-[70vh] w-full"></iframe>`;
-    else body = `<iframe src="${url}" class="h-[70vh] w-full"></iframe>`;
+    if (m.loading) {
+      return `<div class="modal-backdrop"><div class="modal modal-lg"><p>加载预览...</p></div></div>`;
+    }
+    const body = renderPreviewBody(m.previewInfo, m.mime);
     return `<div class="modal-backdrop"><div class="modal modal-lg"><div class="mb-2 flex items-center justify-between"><h3 class="font-semibold">${esc(m.fileName)}</h3><button id="modal-close" class="btn-secondary">关闭</button></div>${body}</div></div>`;
   }
 
@@ -449,7 +522,10 @@ function renderAuth() {
 function renderFileActions(f) {
   const btns = [];
   if (f.isFolder) {
-    if (f.owned) btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="collab" data-id="${f.id}" data-name="${esc(f.name)}">协作</button>`);
+    if (f.owned) {
+      btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="share" data-id="${f.id}" data-name="${esc(f.name)}" data-folder="1">分享</button>`);
+      btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="collab" data-id="${f.id}" data-name="${esc(f.name)}">协作</button>`);
+    }
     return btns.join('');
   }
   if (f.previewable) btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="preview" data-id="${f.id}" data-name="${esc(f.name)}" data-mime="${esc(f.mimeType || '')}">预览</button>`);
@@ -503,6 +579,89 @@ function renderMain() {
     </main>${renderModal()}</div>`;
 }
 
+function renderShareFolderView() {
+  const info = state.shareInfo;
+  const token = state.sharePage;
+  const q = state.shareAccessToken ? `?accessToken=${encodeURIComponent(state.shareAccessToken)}` : '';
+
+  if (state.sharePreviewFile) {
+    const f = state.sharePreviewFile;
+    if (f.loading) {
+      return `<div class="mx-auto max-w-4xl p-6"><p>加载预览...</p></div>`;
+    }
+    const preview = info.allowPreview ? renderPreviewBody(f.previewInfo, f.mimeType) : '';
+    const downloadUrl = `${API}/share/${token}/files/${f.id}/download${q}`;
+    return `<div class="mx-auto max-w-4xl p-6">
+      <button class="mb-4 text-sm text-brand-600 hover:underline" id="share-back-folder">← 返回文件夹</button>
+      <h1 class="mb-2 text-xl font-bold">${esc(f.name)}</h1>
+      <p class="mb-4 text-sm text-slate-500">${formatBytes(f.size)} · ${f.mimeType || '未知类型'}</p>
+      ${preview}
+      <div class="mt-4 flex flex-wrap gap-2">
+        ${info.allowDownload ? `<a class="btn-primary" href="${downloadUrl}" target="_blank">下载</a>` : ''}
+      </div></div>`;
+  }
+
+  const crumbs = state.shareFolderBreadcrumbs
+    .map(
+      (c, i) =>
+        `<button class="text-sm ${i === state.shareFolderBreadcrumbs.length - 1 ? 'font-medium text-slate-900' : 'text-brand-600 hover:underline'}" data-share-crumb="${i}">${esc(c.name)}</button>`
+    )
+    .join('<span class="mx-2 text-slate-300">/</span>');
+
+  const rows = (state.shareFiles || [])
+    .map((f) => {
+      if (f.isFolder) {
+        return `<tr class="border-b hover:bg-slate-50"><td class="px-4 py-3"><button class="font-medium hover:text-brand-600" data-share-open="${f.id}" data-share-name="${esc(f.name)}">📁 ${esc(f.name)}</button></td><td class="px-4 py-3 text-sm text-slate-500">—</td><td></td></tr>`;
+      }
+      const actions = [];
+      if (info.allowPreview && f.previewable) {
+        actions.push(`<button class="btn-secondary px-2 py-1 text-xs" data-share-preview="${f.id}" data-share-fname="${esc(f.name)}" data-share-mime="${esc(f.mimeType || '')}">预览</button>`);
+      }
+      if (info.allowDownload) {
+        actions.push(`<a class="btn-secondary px-2 py-1 text-xs" href="${API}/share/${token}/files/${f.id}/download${q}" target="_blank">下载</a>`);
+      }
+      return `<tr class="border-b hover:bg-slate-50"><td class="px-4 py-3">📄 ${esc(f.name)}</td><td class="px-4 py-3 text-sm text-slate-500">${formatBytes(f.size)}</td><td class="px-4 py-3"><div class="flex justify-end gap-1">${actions.join('')}</div></td></tr>`;
+    })
+    .join('');
+
+  return `<div class="mx-auto max-w-4xl p-6">
+    <h1 class="mb-2 text-xl font-bold">📁 ${esc(info.name)}</h1>
+    <p class="mb-4 text-sm text-slate-500">文件夹分享 · 浏览并下载内容</p>
+    <nav class="mb-4">${crumbs}</nav>
+    <div class="overflow-hidden rounded-xl border bg-white">
+      <table class="w-full text-left"><thead><tr class="border-b bg-slate-50 text-sm text-slate-500"><th class="px-4 py-2">名称</th><th class="px-4 py-2">大小</th><th class="px-4 py-2 text-right">操作</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="3" class="p-8 text-center text-slate-400">空文件夹</td></tr>'}</tbody></table>
+    </div></div>`;
+}
+
+function renderShareFileView() {
+  const info = state.shareInfo;
+  const token = state.sharePage;
+  const q = state.shareAccessToken ? `?accessToken=${encodeURIComponent(state.shareAccessToken)}` : '';
+  const previewUrl = `${API}/share/${token}/preview${q}`;
+  const downloadUrl = `${API}/share/${token}/download${q}`;
+
+  let preview = '';
+  if (info.allowPreview) {
+    if (info.previewMode === 'office' && info.previewable) {
+      preview = `<iframe src="https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(previewUrl)}" class="h-96 w-full"></iframe>`;
+    } else if ((info.mimeType || '').startsWith('image/')) {
+      preview = `<img src="${previewUrl}" class="max-h-96 w-full object-contain" />`;
+    } else if (info.previewable) {
+      preview = `<iframe src="${previewUrl}" class="h-96 w-full"></iframe>`;
+    }
+  }
+
+  return `<div class="mx-auto max-w-3xl p-6">
+    <h1 class="mb-2 text-xl font-bold">${esc(info.name)}</h1>
+    <p class="mb-4 text-sm text-slate-500">${formatBytes(info.size)} · ${info.mimeType || '未知类型'}</p>
+    ${preview}
+    <div class="mt-4 flex flex-wrap gap-2">
+      ${info.allowDownload ? `<a class="btn-primary" href="${downloadUrl}" target="_blank">下载</a>` : ''}
+      ${info.allowEdit ? `<button class="btn-secondary" id="share-edit-btn">在线编辑</button>` : ''}
+    </div></div>`;
+}
+
 function renderSharePageView() {
   const info = state.shareInfo;
   if (state.shareError) return `<div class="flex min-h-screen items-center justify-center"><p class="text-red-500">${esc(state.shareError)}</p></div>`;
@@ -517,26 +676,8 @@ function renderSharePageView() {
       <button class="btn-primary w-full">验证</button></form></div></div>`;
   }
 
-  const token = state.sharePage;
-  const q = state.shareAccessToken ? `?accessToken=${encodeURIComponent(state.shareAccessToken)}` : '';
-  const previewUrl = `${API}/share/${token}/preview${q}`;
-  const downloadUrl = `${API}/share/${token}/download${q}`;
-
-  let preview = '';
-  if (info.allowPreview) {
-    if ((info.mimeType || '').startsWith('image/')) preview = `<img src="${previewUrl}" class="max-h-96 w-full object-contain" />`;
-    else if (info.mimeType === 'application/pdf') preview = `<iframe src="${previewUrl}" class="h-96 w-full"></iframe>`;
-    else preview = `<iframe src="${previewUrl}" class="h-96 w-full"></iframe>`;
-  }
-
-  return `<div class="mx-auto max-w-3xl p-6">
-    <h1 class="mb-2 text-xl font-bold">${esc(info.name)}</h1>
-    <p class="mb-4 text-sm text-slate-500">${formatBytes(info.size)} · ${info.mimeType || '未知类型'}</p>
-    ${preview}
-    <div class="mt-4 flex flex-wrap gap-2">
-      ${info.allowDownload ? `<a class="btn-primary" href="${downloadUrl}" target="_blank">下载</a>` : ''}
-      ${info.allowEdit ? `<button class="btn-secondary" id="share-edit-btn">在线编辑</button>` : ''}
-    </div></div>`;
+  if (info.isFolder) return renderShareFolderView();
+  return renderShareFileView();
 }
 
 function render() {
@@ -588,6 +729,79 @@ function bindSharePageEvents() {
     await api(`/share/${state.sharePage}/content`, { method: 'PUT', body: JSON.stringify({ content }) });
     alert('已保存');
   });
+  document.getElementById('share-back-folder')?.addEventListener('click', () => {
+    state.sharePreviewFile = null;
+    render();
+  });
+  document.querySelectorAll('[data-share-crumb]').forEach((el) => {
+    el.addEventListener('click', () => navigateShareFolder(Number(el.dataset.shareCrumb)).catch((err) => alert(err.message)));
+  });
+  document.querySelectorAll('[data-share-open]').forEach((el) => {
+    el.addEventListener('click', () =>
+      openShareFolder(el.dataset.shareOpen, el.dataset.shareName).catch((err) => alert(err.message))
+    );
+  });
+  document.querySelectorAll('[data-share-preview]').forEach((el) => {
+    el.addEventListener('click', () =>
+      openShareFilePreview({
+        id: el.dataset.sharePreview,
+        name: el.dataset.shareFname,
+        mimeType: el.dataset.shareMime,
+        size: 0,
+        previewable: true,
+      }).catch((err) => alert(err.message))
+    );
+  });
+}
+
+let collabSearchTimer = null;
+
+function bindCollabAutocomplete() {
+  const input = document.getElementById('collab-username');
+  const list = document.getElementById('collab-suggestions');
+  if (!input || !list) return;
+
+  input.addEventListener('input', () => {
+    clearTimeout(collabSearchTimer);
+    const q = input.value.trim();
+    if (q.length < 1) {
+      list.innerHTML = '';
+      list.classList.add('hidden');
+      return;
+    }
+    collabSearchTimer = setTimeout(async () => {
+      try {
+        const exclude = (state.modal?.collaborators || []).map((c) => c.userId).join(',');
+        const d = await api(
+          `/user/search?q=${encodeURIComponent(q)}${exclude ? `&exclude=${encodeURIComponent(exclude)}` : ''}`
+        );
+        list.innerHTML = d.users
+          .map(
+            (u) =>
+              `<button type="button" class="collab-suggest w-full px-3 py-2 text-left text-sm hover:bg-slate-100" data-username="${esc(u.username)}">${esc(u.username)}</button>`
+          )
+          .join('');
+        list.classList.toggle('hidden', !d.users.length);
+        list.querySelectorAll('.collab-suggest').forEach((btn) => {
+          btn.addEventListener('mousedown', (e) => e.preventDefault());
+          btn.addEventListener('click', () => {
+            input.value = btn.dataset.username;
+            list.innerHTML = '';
+            list.classList.add('hidden');
+          });
+        });
+      } catch {
+        list.classList.add('hidden');
+      }
+    }, 200);
+  });
+
+  input.addEventListener('blur', () => {
+    setTimeout(() => list.classList.add('hidden'), 150);
+  });
+  input.addEventListener('focus', () => {
+    if (list.innerHTML) list.classList.remove('hidden');
+  });
 }
 
 function bindMainEvents() {
@@ -606,7 +820,7 @@ function bindMainEvents() {
       } else if (action === 'download') downloadFile(id);
       else if (action === 'preview') openPreviewModal(id, name, mime);
       else if (action === 'edit') openEditModal(id, name);
-      else if (action === 'share') openShareModal(id, name);
+      else if (action === 'share') openShareModal(id, name, folder === '1');
       else if (action === 'collab') openCollabModal(id, name);
       else if (action === 'rename') {
         const n = prompt('重命名', name);
@@ -642,6 +856,7 @@ function bindMainEvents() {
   document.querySelectorAll('[data-rm-collab]').forEach((el) => {
     el.addEventListener('click', () => removeCollab(el.dataset.rmCollab).catch((err) => alert(err.message)));
   });
+  bindCollabAutocomplete();
   document.getElementById('save-edit')?.addEventListener('click', () => saveEditContent().catch((err) => alert(err.message)));
 
   const dropZone = document.getElementById('drop-zone');

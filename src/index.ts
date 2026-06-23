@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from './env';
 import auth from './routes/auth';
 import files from './routes/files';
+import { previewPublicRouter } from './routes/preview-public';
 import { publicShareRouter } from './routes/share-public';
 import shares from './routes/shares';
 import user from './routes/user';
@@ -17,6 +18,7 @@ app.route('/api/user', user);
 app.route('/api/files', files);
 app.route('/api/shares', shares);
 app.route('/api/share', publicShareRouter);
+app.route('/api/public-preview', previewPublicRouter);
 
 app.get('*', async (c) => {
   const url = new URL(c.req.url);

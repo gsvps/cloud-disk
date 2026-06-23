@@ -12,7 +12,15 @@ import {
   getOwnedParent,
   listAccessibleFiles,
 } from '../lib/file-access';
-import { contentDisposition, isEditable, isPreviewable, TEXT_MAX_EDIT_BYTES } from '../lib/preview';
+import {
+  contentDisposition,
+  getOfficeEmbedUrl,
+  getPreviewMode,
+  isEditable,
+  isPreviewable,
+  TEXT_MAX_EDIT_BYTES,
+} from '../lib/preview';
+import { createPreviewTicket } from '../lib/preview-ticket';
 import { jsonFail, jsonOk } from '../lib/response';
 import { authMiddleware, type AuthVariables } from '../middleware/auth';
 
@@ -31,6 +39,7 @@ function toFileDto(record: typeof files.$inferSelect, extra: Record<string, unkn
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
     previewable: !record.isFolder && isPreviewable(record.mimeType, record.name),
+    previewMode: record.isFolder ? null : getPreviewMode(record.mimeType, record.name),
     editable: !record.isFolder && isEditable(record.mimeType, record.name, record.size),
     ...extra,
   };
@@ -142,6 +151,37 @@ filesRouter.post('/upload', async (c) => {
 
   const [record] = await db.select().from(files).where(eq(files.id, id)).limit(1);
   return jsonOk(c, { file: toFileDto(record!, { permission: 'owner', owned: true }) });
+});
+
+filesRouter.get('/:id/preview-info', async (c) => {
+  const access = await requireReadAccess(c);
+  if (access instanceof Response) return access;
+  const { file } = access;
+
+  if (file.isFolder || !file.r2Key) return jsonFail(c, 'BAD_REQUEST', '无法预览');
+  const mode = getPreviewMode(file.mimeType, file.name);
+  if (!mode) return jsonFail(c, 'BAD_REQUEST', '该文件不支持预览');
+
+  const origin = new URL(c.req.url).origin;
+
+  if (mode === 'office') {
+    const ticket = await createPreviewTicket(c.env.KV, {
+      r2Key: file.r2Key,
+      name: file.name,
+      mimeType: file.mimeType,
+    });
+    const publicUrl = `${origin}/api/public-preview/${ticket}`;
+    return jsonOk(c, {
+      mode: 'office',
+      embedUrl: getOfficeEmbedUrl(publicUrl),
+      streamUrl: publicUrl,
+    });
+  }
+
+  return jsonOk(c, {
+    mode: 'direct',
+    url: `${origin}/api/files/${file.id}/preview`,
+  });
 });
 
 filesRouter.get('/:id/preview', async (c) => {
