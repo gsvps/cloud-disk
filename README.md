@@ -35,9 +35,9 @@
 > Worker 名称、D1/KV/R2 仍可保持 `cloud-disk` 系列默认值，**不必与 Git 仓库名相同**。
 
 > **若你已有该源码仓库，想直接部署（不 fork）**  
-> 可跳过一键按钮，在 [Cloudflare Dashboard](https://dash.cloudflare.com/) → **Workers & Pages** → **Create** → 连接 GitHub 仓库 `gsvps/cloud-disk`，按 `wrangler.jsonc` 配置资源后部署即可。
+> 可跳过一键按钮，在 [Cloudflare Dashboard](https://dash.cloudflare.com/) → **Workers & Pages** → **Create** → 连接 GitHub 仓库 `gsvps/cloud-disk`，按 `wrangler.toml` 配置资源后部署即可。
 
-点击按钮后，Cloudflare 会读取 `wrangler.jsonc` 并**自动创建** D1、KV、R2 资源。默认命名如下（KV 与 R2 不可同名，已做区分）：
+点击按钮后，Cloudflare 会读取 `wrangler.toml` 并**自动创建** D1、KV、R2 资源。默认命名如下（KV 与 R2 不可同名，已做区分）：
 
 | 资源 | 默认名称 | 说明 |
 |------|----------|------|
@@ -55,17 +55,17 @@
 
 | 参数 | 默认值 | 来源 |
 |------|--------|------|
-| 项目名称 | `CloudDisk` | `wrangler.jsonc` → `vars.APP_NAME` |
-| Worker 名称 | `cloud-disk` | `wrangler.jsonc` |
+| 项目名称 | `CloudDisk` | `wrangler.toml` → `[vars]` `APP_NAME` |
+| Worker 名称 | `cloud-disk` | `wrangler.toml` → `name` |
 | 构建命令 | `npm run build` | `package.json` → `scripts.build` |
 | 部署命令 | `npm run deploy` | `package.json` → `scripts.deploy` |
 | 预览部署命令 | `npx wrangler versions upload` | Cloudflare 平台默认 |
 | Node.js 版本 | `22` | `.nvmrc` / `engines.node` |
 | 生产分支 | `main` | 仓库默认分支 |
-| D1 数据库 | `cloud-disk` | `wrangler.jsonc` |
+| D1 数据库 | `cloud-disk` | `wrangler.toml` |
 | KV 命名空间 | `cloud-disk` | 部署页默认与 Worker 名相同 |
-| R2 存储桶 | `cloud-disk-files` | `wrangler.jsonc` |
-| 环境变量 `APP_NAME` | `CloudDisk` | `wrangler.jsonc` → `vars` |
+| R2 存储桶 | `cloud-disk-files` | `wrangler.toml` |
+| 环境变量 `APP_NAME` | `CloudDisk` | `wrangler.toml` → `[vars]` |
 
 > 说明：D1 与 KV 均使用 `cloud-disk`（不同类型资源可同名）；R2 使用 `cloud-disk-files`，避免与 KV 冲突。
 
@@ -153,7 +153,7 @@ cloud-disk/
 │   └── lib/              # 工具函数
 ├── public/               # 前端静态资源
 ├── migrations/           # D1 迁移
-└── wrangler.jsonc
+└── wrangler.toml
 ```
 
 ## License
