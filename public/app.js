@@ -691,6 +691,11 @@ function renderFooter() {
           <p class="mt-2 text-slate-500">个人网盘在免费额度内通常足够；若出现配额错误，可升级 Workers Paid（$5/月起）或优化使用。数据以 Cloudflare 官方文档为准。</p>
         </div>
       </details>
+      <div class="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 border-t border-slate-200/80 pt-4 text-xs">
+        <a href="${SITE.website}" target="_blank" rel="noopener noreferrer">作者官网</a>
+        <span class="text-slate-300">·</span>
+        <a href="${SITE.telegram}" target="_blank" rel="noopener noreferrer">交流群</a>
+      </div>
     </div>
   </footer>`;
 }

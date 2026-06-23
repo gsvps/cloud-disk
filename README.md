@@ -4,33 +4,57 @@
 
 仓库地址：[https://github.com/gsvps/cloud-disk](https://github.com/gsvps/cloud-disk)
 
-## 功能
+## 功能介绍
 
-- 多人协作：用户注册、文件夹/文件协作者（只读 / 可编辑）、**用户名搜索自动补全**、「与我共享」
-- 外链分享：分享密码、有效期、下载次数限制、直链、**文件夹分享**
-- 在线预览：图片、PDF、音视频、文本、**Office 文档（Word/Excel/PPT 等）**
-- 在线编辑：文本类文件（≤ 2MB）
-- 文件上传 / 下载 / 删除 / 重命名、文件夹层级浏览、拖拽上传
-- Session 登录（KV 存储）
+CloudDisk 适合个人或小团队，在 Cloudflare 免费套餐内搭建私有网盘：数据存于 **R2**，元数据在 **D1**，登录会话在 **KV**，全程 Serverless。
+
+### 文件与目录
+
+- 文件夹层级浏览、新建文件夹 / 新建文件（**任意后缀**，如 `.md`、`.py`、`.json`）
+- 上传 / 下载 / 删除 / 重命名，支持拖拽上传与**上传进度显示**
+- 大文件（≥ 5MB）**分片上传**，中断后可续传（重新选择相同文件即可）
+
+### 协作与权限
+
+- 多用户注册登录，管理员可开关注册、管理用户与用户组
+- 为文件或文件夹添加协作者：**只读**或**可编辑**
+- 协作者搜索**用户名自动补全**，「与我共享」独立视图
+- 用户组可配置上传、分享、协作、管理权限
+
+### 分享
+
+- 外链分享：可选密码、有效期、下载次数上限
+- 支持**文件夹分享**（浏览子目录、预览、下载）
+- 可选直链下载、在线预览、访客在线编辑（视文件类型与分享设置）
+
+### 预览与编辑
+
+- 在线预览：图片、PDF、音视频、文本、**Office 文档**（Word / Excel / PPT 等）
+- 预览页显示**完整链接**并支持一键复制
+- 文本类文件（≤ 2MB）在线编辑；图片等不可编辑类型不显示编辑入口
+- 协作者权限与分享权限一致：只读不可编辑，可编辑才显示编辑按钮
+
+### 体验与管理
+
+- 全屏预览 / 编辑，操作结果 **Toast 提示**（成功、失败、API 错误）
+- 设置页：修改密码、开放注册、用户 / 用户组管理（管理员）
+- 页脚展示 **Cloudflare 免费套餐**相关限额说明（Workers / D1 / R2 / KV）
 
 > **已部署用户升级**：重新部署后需执行 D1 迁移 `npm run db:migrate`（或 Cloudflare Builds 部署命令中已包含）。
 
 ## 技术栈
 
-- Cloudflare Workers + Hono
-- Cloudflare D1（元数据）+ R2（文件存储）+ KV（会话）
-- Drizzle ORM + TypeScript + Tailwind CSS
+- [Cloudflare Workers](https://developers.cloudflare.com/workers/) + [Hono](https://hono.dev/)
+- [Cloudflare D1](https://developers.cloudflare.com/d1/)（元数据）+ [R2](https://developers.cloudflare.com/r2/)（文件存储）+ [KV](https://developers.cloudflare.com/kv/)（会话）
+- [Drizzle ORM](https://orm.drizzle.team/) + [TypeScript](https://www.typescriptlang.org/) + [Tailwind CSS](https://tailwindcss.com/)
 
 ## 一键部署到 Cloudflare
 
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/gsvps/cloud-disk/tree/main)
 
-> **若部署页仍显示旧名称（如 `cloud-disk-db`）**  
-> 部署页会缓存配置。请**关闭旧标签页**，用无痕窗口重新打开上方按钮，或访问：  
-> https://deploy.workers.cloudflare.com/?url=https://github.com/gsvps/cloud-disk/tree/main  
 > 在「Configure resources」步骤确认：**D1** = `cloud-disk`，**KV** = `cloud-disk`，**R2** = `cloud-disk-files`。**项目名称 / Worker 名称 / `APP_NAME` 默认留空，请按需自行填写**（留空 `APP_NAME` 时界面显示 `CloudDisk`）。
 
-> **若提示「已存在具有该名称的存储库」**  
+> **若提示「已存在具有该名称的存储库」**
 > 一键部署会在你的 GitHub 账号下**新建一个 fork 仓库**。本项目**不再预填项目名称**，请在部署页自行填写 Git 仓库名称（例如 `my-cloud-disk`）。若你已有源码仓库，建议**跳过一键按钮**，改用 Dashboard 连接已有仓库（见下文）。
 
 > **若你已有该源码仓库，想直接部署（不 fork）**  
@@ -168,6 +192,22 @@ cloud-disk/
 └── wrangler.toml
 ```
 
+## 作者与交流
+
+- 作者官网：[https://www.gsvps.com](https://www.gsvps.com)
+- Telegram 交流群：[https://t.me/gsvpscom](https://t.me/gsvpscom)
+
 ## License
 
-MIT
+本项目采用 **[MIT License](LICENSE)**（MIT 开源许可证）。
+
+**MIT 是什么？**  
+MIT 是最常见的宽松开源协议之一，意思是：
+
+- **可以直接用**：个人、公司均可免费使用本仓库代码，包括部署、修改、二次开发、商用。
+- **可以分发**：你可以 fork、发布自己的版本，或集成到其他项目里。
+- **义务很少**：只需在副本中**保留原作者的版权声明和 MIT 许可证全文**（见 `LICENSE` 文件）。
+- **无担保**：软件按「现状」提供，作者不承担使用后果的法律责任。
+
+简单说：**放心用、改、部署**；若对外再分发或商用，带上 LICENSE 里的版权说明即可。  
+若你仅在自己 Cloudflare 账号部署自用，无需额外付费或向作者申请授权。
