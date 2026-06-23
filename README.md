@@ -36,10 +36,11 @@
 
 | 资源 | 默认名称 | 说明 |
 |------|----------|------|
-| Worker | `cloud-disk` | 应用本身 |
-| D1 | `cloud-disk-db` | 用户与文件元数据 |
-| KV | `cloud-disk-KV` | 登录会话（由 Worker 名 + binding 生成） |
-| R2 | `cloud-disk-files` | 上传的文件内容 |
+| 项目名称 | `CloudDisk` | 应用显示名称（`APP_NAME`） |
+| Worker | `cloud-disk` | Workers 脚本名 / 访问域名 |
+| D1 | `cloud-disk` | 用户与文件元数据 |
+| KV | `cloud-disk` | 登录会话（与 D1 同名，资源类型不同） |
+| R2 | `cloud-disk-files` | 上传的文件内容（须与 KV 区分） |
 
 部署完成后访问 Workers 域名，首次打开会引导创建管理员账号。
 
@@ -49,18 +50,19 @@
 
 | 参数 | 默认值 | 来源 |
 |------|--------|------|
+| 项目名称 | `CloudDisk` | `wrangler.toml` → `APP_NAME` |
 | Worker 名称 | `cloud-disk` | `wrangler.toml` |
 | 构建命令 | `npm run build` | `package.json` → `scripts.build` |
 | 部署命令 | `npm run deploy` | `package.json` → `scripts.deploy` |
 | 预览部署命令 | `npx wrangler versions upload` | Cloudflare 平台默认 |
 | Node.js 版本 | `22` | `.nvmrc` / `engines.node` |
 | 生产分支 | `main` | 仓库默认分支 |
-| D1 数据库 | `cloud-disk-db` | `wrangler.toml` |
-| KV 命名空间 | `cloud-disk-KV` | Worker 名 + binding |
+| D1 数据库 | `cloud-disk` | `wrangler.toml` |
+| KV 命名空间 | `cloud-disk` | 部署配置页（与 D1 统一） |
 | R2 存储桶 | `cloud-disk-files` | `wrangler.toml` |
 | 环境变量 `APP_NAME` | `CloudDisk` | `wrangler.toml` → `[vars]` |
 
-> 说明：KV 与 R2 不能使用相同名称，因此 R2 默认为 `cloud-disk-files`，KV 默认为 `cloud-disk-KV`。
+> 说明：D1 与 KV 均使用 `cloud-disk`（不同类型资源可同名）；R2 使用 `cloud-disk-files`，避免与 KV 冲突。
 
 #### 高级设置里其他字段要不要管？
 
@@ -90,12 +92,12 @@ npx wrangler login
 #### 3. 创建 Cloudflare 资源（可选，也可由 wrangler deploy 自动创建）
 
 ```bash
-npx wrangler d1 create cloud-disk-db
-npx wrangler kv namespace create cloud-disk-KV
+npx wrangler d1 create cloud-disk
+npx wrangler kv namespace create cloud-disk
 npx wrangler r2 bucket create cloud-disk-files
 ```
 
-> 注意：KV 命名空间与 R2 存储桶**不能使用相同名称**，因此分别命名为 `cloud-disk-KV` 与 `cloud-disk-files`。
+> 注意：D1 与 KV 可同为 `cloud-disk`；R2 须使用 `cloud-disk-files`，避免与 KV 同名。
 
 #### 4. 构建并部署
 
