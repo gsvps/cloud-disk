@@ -4,6 +4,9 @@
 
 A lightweight personal cloud drive on Cloudflare Workers. **Cloudflare deployment only** — free tier friendly, no VPS, no MySQL.
 
+> **Note for users in China**  
+> Some Cloudflare features (payment method binding, plan upgrades, certain add-ons) may require a **Visa or Mastercard** on your account. If domestic cards cannot pass verification, see the author’s guide (Chinese): [virtual card setup for cross-border payments](https://www.gsvps.com/articles/tutorials-2).
+
 ## Screenshots
 
 | Login / Register | File list |
