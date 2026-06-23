@@ -19,6 +19,7 @@ import {
   getPreviewMode,
   isEditable,
   isPreviewable,
+  resolveMimeForNewFile,
   TEXT_MAX_EDIT_BYTES,
 } from '../lib/preview';
 import { createPreviewTicket } from '../lib/preview-ticket';
@@ -101,6 +102,55 @@ filesRouter.post('/folders', async (c) => {
     name,
     isFolder: true,
     size: 0,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const [record] = await db.select().from(files).where(eq(files.id, id)).limit(1);
+  return jsonOk(c, { file: toFileDto(record!, { permission: 'owner', owned: true }) });
+});
+
+filesRouter.post('/create', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json<{ name?: string; parentId?: string | null; content?: string }>();
+  const name = sanitizeFilename(body.name?.trim() || '');
+  const parentId = body.parentId ?? null;
+
+  if (!name) return jsonFail(c, 'BAD_REQUEST', '文件名不能为空');
+
+  const db = createDb(c.env.DB);
+  const perms = await getUserPermissions(db, user.userId);
+  if (!perms?.canUpload) {
+    return jsonFail(c, 'FORBIDDEN', '当前账号无上传权限', 403);
+  }
+  if (!(await getOwnedParent(db, user.userId, parentId))) {
+    return jsonFail(c, 'NOT_FOUND', '父文件夹不存在或无写入权限', 404);
+  }
+
+  const content = body.content ?? '';
+  const contentBytes = new TextEncoder().encode(content);
+  if (contentBytes.length > TEXT_MAX_EDIT_BYTES) {
+    return jsonFail(c, 'BAD_REQUEST', '文件过大，无法创建');
+  }
+
+  const mimeType = resolveMimeForNewFile(name);
+  const id = generateId();
+  const r2Key = `${user.userId}/${id}/${name}`;
+  const now = new Date();
+
+  await c.env.R2.put(r2Key, contentBytes, {
+    httpMetadata: { contentType: mimeType },
+  });
+
+  await db.insert(files).values({
+    id,
+    userId: user.userId,
+    parentId,
+    name,
+    isFolder: false,
+    r2Key,
+    size: contentBytes.length,
+    mimeType,
     createdAt: now,
     updatedAt: now,
   });

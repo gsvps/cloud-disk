@@ -1,4 +1,5 @@
 const API = '/api';
+const APP_VERSION = '1.1.0';
 const SITE = {
   github: 'https://github.com/gsvps/cloud-disk',
   website: 'https://www.gsvps.com',
@@ -217,19 +218,85 @@ async function navigateTo(index) {
   render();
 }
 
-async function createFolder() {
-  const name = prompt('请输入文件夹名称');
-  if (!name?.trim()) return;
-  try {
-    await api('/files/folders', {
-      method: 'POST',
-      body: JSON.stringify({ name: name.trim(), parentId: state.currentParentId }),
-    });
-    await loadFiles();
-    render();
-  } catch (err) {
-    setError(err.message);
+function canEditFile(f) {
+  return !!f.editable && (f.permission === 'owner' || f.permission === 'edit');
+}
+
+function fileRowAction(f) {
+  if (f.isFolder) return 'open';
+  if (canEditFile(f)) return 'edit';
+  if (f.previewable) return 'preview';
+  return 'download';
+}
+
+function resolvePreviewLink(info, fileId, shareToken) {
+  if (!info) return '';
+  if (info.streamUrl) return info.streamUrl;
+  if (info.url) return info.url.startsWith('http') ? info.url : `${location.origin}${info.url}`;
+  if (shareToken) {
+    const q = state.shareAccessToken ? `?accessToken=${encodeURIComponent(state.shareAccessToken)}` : '';
+    return `${location.origin}${API}/share/${shareToken}/files/${fileId}/preview${q}`;
   }
+  return `${location.origin}${API}/files/${fileId}/preview`;
+}
+
+async function copyToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+}
+
+function renderPreviewLinkBar(link, inputId = 'preview-link', btnId = 'copy-preview-link') {
+  if (!link) return '';
+  return `<div class="link-copy-bar">
+    <input class="link-copy-input" id="${inputId}" readonly value="${esc(link)}" />
+    <button type="button" class="btn-secondary shrink-0 text-xs" id="${btnId}">复制链接</button>
+  </div>`;
+}
+
+function openNewFolderModal() {
+  state.modal = { type: 'newfolder' };
+  render();
+}
+
+function openNewFileModal() {
+  state.modal = { type: 'newfile' };
+  render();
+}
+
+async function submitNewFolder(form) {
+  const name = form.name.value.trim();
+  if (!name) return;
+  await api('/files/folders', {
+    method: 'POST',
+    body: JSON.stringify({ name, parentId: state.currentParentId }),
+  });
+  closeModal();
+  await loadFiles();
+  render();
+}
+
+async function submitNewFile(form) {
+  const name = form.name.value.trim();
+  if (!name) return;
+  await api('/files/create', {
+    method: 'POST',
+    body: JSON.stringify({ name, parentId: state.currentParentId, content: form.content.value ?? '' }),
+  });
+  closeModal();
+  await loadFiles();
+  render();
+}
+
+async function createFolder() {
+  openNewFolderModal();
 }
 
 async function uploadFiles(fileList) {
@@ -283,13 +350,13 @@ function renderPreviewBody(info, mime, fullscreen = false) {
 function renderFooter() {
   return `<footer class="site-footer">
     <div class="mx-auto max-w-6xl px-4 py-5 text-center text-sm">
-      <p class="mb-2 text-xs text-slate-400">CloudDisk · 轻量协作网盘</p>
-      <div class="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
-        <a href="${SITE.website}" target="_blank" rel="noopener noreferrer">官网 www.gsvps.com</a>
+      <p class="mb-2 text-xs text-slate-400">CloudDisk · 轻量协作网盘 · v${APP_VERSION}</p>
+      <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+        <a href="${SITE.website}" target="_blank" rel="noopener noreferrer">作者官网 www.gsvps.com</a>
         <span class="hidden text-slate-300 sm:inline">·</span>
         <a href="${SITE.telegram}" target="_blank" rel="noopener noreferrer">交流群 t.me/gsvpscom</a>
         <span class="hidden text-slate-300 sm:inline">·</span>
-        <a href="${SITE.github}" target="_blank" rel="noopener noreferrer">GitHub 仓库</a>
+        <a href="${SITE.github}" target="_blank" rel="noopener noreferrer">GitHub文档 ${SITE.github}</a>
       </div>
     </div>
   </footer>`;
@@ -328,12 +395,21 @@ function openCollabModal(id, name) {
 }
 
 function openPreviewModal(id, name, mime) {
-  state.modal = { type: 'preview', fileId: id, fileName: name, mime, loading: true };
+  const file = state.files.find((f) => f.id === id);
+  state.modal = {
+    type: 'preview',
+    fileId: id,
+    fileName: name,
+    mime,
+    loading: true,
+    canEdit: file ? canEditFile(file) : false,
+  };
   render();
   api(`/files/${id}/preview-info`)
     .then((d) => {
       if (state.modal?.fileId === id && state.modal?.type === 'preview') {
         state.modal.previewInfo = d;
+        state.modal.previewLink = resolvePreviewLink(d, id);
         state.modal.loading = false;
         render();
       }
@@ -424,12 +500,26 @@ async function navigateShareFolder(index) {
   render();
 }
 
+async function openShareFileEdit(fileId) {
+  const d = await api(`/share/${state.sharePage}/files/${fileId}/content`);
+  if (!d.editable) return alert('该文件不支持编辑');
+  const content = prompt('编辑内容', d.content);
+  if (content === null) return;
+  await api(`/share/${state.sharePage}/files/${fileId}/content`, { method: 'PUT', body: JSON.stringify({ content }) });
+  alert('已保存');
+}
+
 async function openShareFilePreview(file) {
   state.sharePreviewFile = { ...file, loading: true };
   render();
   try {
     const info = await api(`/share/${state.sharePage}/files/${file.id}/preview-info`);
-    state.sharePreviewFile = { ...file, previewInfo: info, loading: false };
+    state.sharePreviewFile = {
+      ...file,
+      previewInfo: info,
+      previewLink: resolvePreviewLink(info, file.id, state.sharePage),
+      loading: false,
+    };
   } catch (err) {
     state.sharePreviewFile = null;
     alert(err.message);
@@ -552,18 +642,46 @@ function renderModal() {
       </div>`;
     }
     const body = renderPreviewBody(m.previewInfo, m.mime, true);
+    const linkBar = renderPreviewLinkBar(m.previewLink);
     return `<div class="modal-backdrop modal-backdrop-full">
       <div class="modal-fullscreen">
         <div class="modal-fullscreen-header">
-          <div class="min-w-0">
+          <div class="min-w-0 flex-1">
             <p class="text-xs font-medium uppercase tracking-wide text-brand-600">预览</p>
             <h3 class="truncate font-semibold text-slate-900">${esc(m.fileName)}</h3>
           </div>
-          <button id="modal-close" class="btn-secondary shrink-0">关闭</button>
+          <div class="flex shrink-0 gap-2">
+            ${m.canEdit ? `<button id="preview-edit-btn" class="btn-secondary">编辑</button>` : ''}
+            <button id="modal-close" class="btn-secondary">关闭</button>
+          </div>
         </div>
+        ${linkBar}
         <div class="modal-fullscreen-body">${body}</div>
       </div>
     </div>`;
+  }
+
+  if (m.type === 'newfolder') {
+    return `<div class="modal-backdrop"><div class="modal">
+      <h3 class="mb-1 text-lg font-semibold text-slate-900">新建文件夹</h3>
+      <p class="mb-4 text-sm text-slate-500">在当前目录下创建文件夹</p>
+      <form id="newfolder-form" class="space-y-3">
+        <div><label class="label">文件夹名称</label><input class="input" name="name" required placeholder="例如：项目资料" autofocus /></div>
+        <div class="flex gap-2"><button type="button" class="btn-secondary flex-1" id="modal-close">取消</button><button type="submit" class="btn-primary flex-1">创建</button></div>
+      </form>
+    </div></div>`;
+  }
+
+  if (m.type === 'newfile') {
+    return `<div class="modal-backdrop"><div class="modal">
+      <h3 class="mb-1 text-lg font-semibold text-slate-900">新建文件</h3>
+      <p class="mb-4 text-sm text-slate-500">文件名可自由指定后缀，如 notes.md、script.py、data.json</p>
+      <form id="newfile-form" class="space-y-3">
+        <div><label class="label">文件名</label><input class="input" name="name" required placeholder="例如：readme.md" autofocus /></div>
+        <div><label class="label">初始内容（可选）</label><textarea class="input h-32 font-mono text-sm" name="content" placeholder="留空则创建空文件"></textarea></div>
+        <div class="flex gap-2"><button type="button" class="btn-secondary flex-1" id="modal-close">取消</button><button type="submit" class="btn-primary flex-1">创建</button></div>
+      </form>
+    </div></div>`;
   }
 
   if (m.type === 'edit') {
@@ -981,7 +1099,7 @@ function renderFileActions(f) {
     return btns.join('');
   }
   if (f.previewable) btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="preview" data-id="${f.id}" data-name="${esc(f.name)}" data-mime="${esc(f.mimeType || '')}">预览</button>`);
-  if (f.editable && (f.permission === 'owner' || f.permission === 'edit')) btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="edit" data-id="${f.id}" data-name="${esc(f.name)}">编辑</button>`);
+  if (canEditFile(f)) btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="edit" data-id="${f.id}" data-name="${esc(f.name)}">编辑</button>`);
   btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="download" data-id="${f.id}">下载</button>`);
   if (f.owned) {
     btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="share" data-id="${f.id}" data-name="${esc(f.name)}">分享</button>`);
@@ -1005,7 +1123,7 @@ function renderMain() {
     ? state.files
         .map(
           (f) => `<tr>
-      <td class="px-4 py-3"><button class="flex items-center gap-2.5 text-left ${f.isFolder ? 'font-semibold text-slate-800 hover:text-brand-600' : 'text-slate-700 hover:text-brand-600'}" data-action="${f.isFolder ? 'open' : 'previewable-open'}" data-id="${f.id}" data-name="${esc(f.name)}" data-preview="${f.previewable}" data-mime="${esc(f.mimeType || '')}"><span class="text-lg">${f.isFolder ? '📁' : '📄'}</span><span class="truncate">${esc(f.name)}</span></button></td>
+      <td class="px-4 py-3"><button class="flex items-center gap-2.5 text-left ${f.isFolder ? 'font-semibold text-slate-800 hover:text-brand-600' : 'text-slate-700 hover:text-brand-600'}" data-action="${fileRowAction(f)}" data-id="${f.id}" data-name="${esc(f.name)}" data-mime="${esc(f.mimeType || '')}"><span class="text-lg">${f.isFolder ? '📁' : '📄'}</span><span class="truncate">${esc(f.name)}</span></button></td>
       <td class="hidden px-4 py-3 text-sm text-slate-500 sm:table-cell">${f.isFolder ? '—' : formatBytes(f.size)}</td>
       <td class="hidden px-4 py-3 text-sm text-slate-500 md:table-cell">${formatDate(f.createdAt)}</td>
       <td class="px-4 py-3"><div class="flex flex-wrap justify-end gap-1.5">${renderFileActions(f)}</div></td></tr>`
@@ -1032,8 +1150,9 @@ function renderMain() {
           <button class="scope-tab ${state.scope === 'mine' ? 'scope-tab-active' : ''}" data-scope="mine">我的文件</button>
           <button class="scope-tab ${state.scope === 'shared' ? 'scope-tab-active' : ''}" data-scope="shared">与我共享</button>
         </div>
-        ${state.scope === 'mine' && state.user.permissions?.canUpload !== false ? `<div class="flex gap-2">
+        ${state.scope === 'mine' && state.user.permissions?.canUpload !== false ? `<div class="flex flex-wrap gap-2">
           <button id="newfolder-btn" class="btn-secondary">新建文件夹</button>
+          <button id="newfile-btn" class="btn-secondary">新建文件</button>
           <label class="btn-primary cursor-pointer">${state.uploading ? '上传中...' : '上传文件'}<input id="file-input" type="file" multiple class="hidden" /></label>
         </div>` : ''}
       </div>
@@ -1074,15 +1193,21 @@ function renderShareFolderView() {
       </div>`;
     }
     const preview = info.allowPreview ? renderPreviewBody(f.previewInfo, f.mimeType, true) : '';
+    const linkBar = info.allowPreview ? renderPreviewLinkBar(f.previewLink, 'share-preview-link', 'copy-share-preview-link') : '';
     const downloadUrl = `${API}/share/${token}/files/${f.id}/download${q}`;
+    const canEdit = info.allowEdit && f.editable;
     return `<div class="fixed inset-0 z-40 flex flex-col bg-white">
       <div class="modal-fullscreen-header">
-        <div class="min-w-0">
+        <div class="min-w-0 flex-1">
           <button class="mb-1 text-sm text-brand-600 hover:underline" id="share-back-folder">← 返回文件夹</button>
           <h1 class="truncate text-lg font-semibold">${esc(f.name)}</h1>
         </div>
-        ${info.allowDownload ? `<a class="btn-primary shrink-0" href="${downloadUrl}" target="_blank">下载</a>` : ''}
+        <div class="flex shrink-0 gap-2">
+          ${canEdit ? `<button class="btn-secondary" id="share-preview-edit-btn" data-file-id="${f.id}">编辑</button>` : ''}
+          ${info.allowDownload ? `<a class="btn-primary shrink-0" href="${downloadUrl}" target="_blank">下载</a>` : ''}
+        </div>
       </div>
+      ${linkBar}
       <div class="modal-fullscreen-body">${preview}</div>
     </div>`;
   }
@@ -1101,7 +1226,10 @@ function renderShareFolderView() {
       }
       const actions = [];
       if (info.allowPreview && f.previewable) {
-        actions.push(`<button class="btn-secondary px-2 py-1 text-xs" data-share-preview="${f.id}" data-share-fname="${esc(f.name)}" data-share-mime="${esc(f.mimeType || '')}">预览</button>`);
+        actions.push(`<button class="btn-secondary px-2 py-1 text-xs" data-share-preview="${f.id}" data-share-fname="${esc(f.name)}" data-share-mime="${esc(f.mimeType || '')}" data-share-editable="${f.editable}">预览</button>`);
+      }
+      if (info.allowEdit && f.editable) {
+        actions.push(`<button class="btn-secondary px-2 py-1 text-xs" data-share-edit="${f.id}" data-share-fname="${esc(f.name)}">编辑</button>`);
       }
       if (info.allowDownload) {
         actions.push(`<a class="btn-secondary px-2 py-1 text-xs" href="${API}/share/${token}/files/${f.id}/download${q}" target="_blank">下载</a>`);
@@ -1138,7 +1266,7 @@ function renderShareFileView() {
   const info = state.shareInfo;
   const token = state.sharePage;
   const q = state.shareAccessToken ? `?accessToken=${encodeURIComponent(state.shareAccessToken)}` : '';
-  const previewUrl = `${API}/share/${token}/preview${q}`;
+  const previewUrl = `${location.origin}${API}/share/${token}/preview${q}`;
   const downloadUrl = `${API}/share/${token}/download${q}`;
 
   let preview = '';
@@ -1151,6 +1279,7 @@ function renderShareFileView() {
       preview = `<iframe src="${previewUrl}" class="preview-frame min-h-[60vh] w-full rounded-xl border border-slate-200"></iframe>`;
     }
   }
+  const linkBar = info.allowPreview && info.previewable ? renderPreviewLinkBar(previewUrl, 'share-file-preview-link', 'copy-share-file-preview-link') : '';
 
   return `<div class="flex min-h-screen flex-col">
     ${renderAppHeader('外链分享', '')}
@@ -1158,10 +1287,11 @@ function renderShareFileView() {
       <div class="card p-6">
         <h1 class="mb-1 text-xl font-bold text-slate-900">${esc(info.name)}</h1>
         <p class="mb-5 text-sm text-slate-500">${formatBytes(info.size)} · ${info.mimeType || '未知类型'}</p>
+        ${linkBar}
         ${preview}
         <div class="mt-5 flex flex-wrap gap-2">
           ${info.allowDownload ? `<a class="btn-primary" href="${downloadUrl}" target="_blank">下载</a>` : ''}
-          ${info.allowEdit ? `<button class="btn-secondary" id="share-edit-btn">在线编辑</button>` : ''}
+          ${info.allowEdit ? `<button class="btn-secondary" id="share-edit-btn">编辑</button>` : ''}
         </div>
       </div>
     </main>
@@ -1362,10 +1492,33 @@ function bindSharePageEvents() {
   });
   document.getElementById('share-edit-btn')?.addEventListener('click', async () => {
     const d = await api(`/share/${state.sharePage}/content`);
+    if (!d.editable) return alert('该文件不支持编辑');
     const content = prompt('编辑内容', d.content);
     if (content === null) return;
     await api(`/share/${state.sharePage}/content`, { method: 'PUT', body: JSON.stringify({ content }) });
     alert('已保存');
+  });
+  document.getElementById('copy-share-preview-link')?.addEventListener('click', async () => {
+    const input = document.getElementById('share-preview-link');
+    if (input?.value) {
+      await copyToClipboard(input.value);
+      alert('链接已复制');
+    }
+  });
+  document.getElementById('copy-share-file-preview-link')?.addEventListener('click', async () => {
+    const input = document.getElementById('share-file-preview-link');
+    if (input?.value) {
+      await copyToClipboard(input.value);
+      alert('链接已复制');
+    }
+  });
+  document.getElementById('share-preview-edit-btn')?.addEventListener('click', async () => {
+    const id = document.getElementById('share-preview-edit-btn')?.dataset.fileId;
+    if (!id) return;
+    await openShareFileEdit(id);
+  });
+  document.querySelectorAll('[data-share-edit]').forEach((el) => {
+    el.addEventListener('click', () => openShareFileEdit(el.dataset.shareEdit).catch((err) => alert(err.message)));
   });
   document.getElementById('share-back-folder')?.addEventListener('click', () => {
     state.sharePreviewFile = null;
@@ -1385,6 +1538,7 @@ function bindSharePageEvents() {
         id: el.dataset.sharePreview,
         name: el.dataset.shareFname,
         mimeType: el.dataset.shareMime,
+        editable: el.dataset.shareEditable === 'true',
         size: 0,
         previewable: true,
       }).catch((err) => alert(err.message))
@@ -1446,17 +1600,15 @@ function bindMainEvents() {
   document.getElementById('settings-btn')?.addEventListener('click', () => openSettings('account').catch((err) => alert(err.message)));
   document.getElementById('logout-btn')?.addEventListener('click', handleLogout);
   document.getElementById('newfolder-btn')?.addEventListener('click', createFolder);
+  document.getElementById('newfile-btn')?.addEventListener('click', openNewFileModal);
   document.querySelectorAll('[data-scope]').forEach((el) => el.addEventListener('click', () => switchScope(el.dataset.scope)));
   document.querySelectorAll('[data-crumb]').forEach((el) => el.addEventListener('click', () => navigateTo(Number(el.dataset.crumb))));
 
   document.querySelectorAll('[data-action]').forEach((el) => {
     el.addEventListener('click', async () => {
-      const { action, id, name, folder, mime, preview } = el.dataset;
+      const { action, id, name, folder, mime } = el.dataset;
       if (action === 'open') openFolder(id, name);
-      else if (action === 'previewable-open') {
-        if (preview === 'true') openPreviewModal(id, name, mime);
-        else downloadFile(id);
-      } else if (action === 'download') downloadFile(id);
+      else if (action === 'download') downloadFile(id);
       else if (action === 'preview') openPreviewModal(id, name, mime);
       else if (action === 'edit') openEditModal(id, name);
       else if (action === 'share') openShareModal(id, name, folder === '1');
@@ -1484,6 +1636,25 @@ function bindMainEvents() {
   });
 
   document.getElementById('modal-close')?.addEventListener('click', closeModal);
+  document.getElementById('newfolder-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitNewFolder(e.target).catch((err) => alert(err.message));
+  });
+  document.getElementById('newfile-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitNewFile(e.target).catch((err) => alert(err.message));
+  });
+  document.getElementById('copy-preview-link')?.addEventListener('click', async () => {
+    const input = document.getElementById('preview-link');
+    if (input?.value) {
+      await copyToClipboard(input.value);
+      alert('链接已复制');
+    }
+  });
+  document.getElementById('preview-edit-btn')?.addEventListener('click', () => {
+    const m = state.modal;
+    if (m?.fileId) openEditModal(m.fileId, m.fileName);
+  });
   document.getElementById('share-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     submitShare(e.target).catch((err) => alert(err.message));

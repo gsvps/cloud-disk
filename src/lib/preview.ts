@@ -101,6 +101,11 @@ export function guessMime(filename: string): string {
   return (ext && map[ext]) || 'application/octet-stream';
 }
 
+export function resolveMimeForNewFile(filename: string): string {
+  const mime = guessMime(filename);
+  return mime === 'application/octet-stream' ? 'text/plain' : mime;
+}
+
 export function getOfficeEmbedUrl(publicFileUrl: string): string {
   return `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(publicFileUrl)}`;
 }

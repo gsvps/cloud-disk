@@ -12,7 +12,7 @@ binding = "DB"
 database_name = "cloud-disk"
 migrations_dir = "migrations"
 
-# KV 不在仓库中填写 id；首次 wrangler deploy 时自动创建（命名形如 {Worker名}-kv）
+# KV 仅声明 binding，不填写 id；一键部署 Configure resources 不会出现 KV，由 wrangler deploy 自动创建
 [[kv_namespaces]]
 binding = "KV"
 

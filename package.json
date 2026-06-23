@@ -1,6 +1,6 @@
 {
   "name": "cloud-disk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "基于 Cloudflare Workers 的轻量级个人网盘，D1 + R2 + KV",
   "private": true,
   "type": "module",
@@ -20,9 +20,6 @@
     "bindings": {
       "DB": {
         "description": "D1 数据库，存储用户与文件元数据。默认名称：`cloud-disk`"
-      },
-      "KV": {
-        "description": "登录会话 KV。**无需手动创建或填写 id**——留空即可，由 `wrangler deploy` 自动创建（命名通常为 `{Worker名}-kv`）。一键部署 Configure resources 步骤**不要**再单独新建 KV，以免重复。"
       },
       "R2": {
         "description": "R2 存储桶，存储上传文件。默认名称：`cloud-disk-files`"
