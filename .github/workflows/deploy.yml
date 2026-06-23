@@ -1,5 +1,7 @@
 name: Deploy to Cloudflare
 
+# 可选：仅在你配置了 GitHub Secrets 且希望 push 到 main 时自动部署时启用
+# 一键部署按钮走的是 Cloudflare Workers Builds，不依赖此 workflow
 on:
   push:
     branches: [main]
@@ -14,7 +16,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
 
       - run: npm ci
