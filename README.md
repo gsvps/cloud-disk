@@ -20,7 +20,12 @@
 
 ## 一键部署到 Cloudflare
 
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/gsvps/cloud-disk)
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/gsvps/cloud-disk/tree/main)
+
+> **若部署页仍显示旧名称（如 `cloud-disk-db`）**  
+> 部署页会缓存配置。请**关闭旧标签页**，用无痕窗口重新打开上方按钮，或访问：  
+> https://deploy.workers.cloudflare.com/?url=https://github.com/gsvps/cloud-disk/tree/main  
+> 在「Configure resources」步骤确认：D1 = `cloud-disk`，KV = `cloud-disk`（通常与 Worker 名相同），R2 = `cloud-disk-files`，`APP_NAME` = `CloudDisk`。
 
 > **若提示「已存在具有该名称的存储库」**  
 > 一键部署会在你的 GitHub 账号下**新建一个 fork 仓库**，默认名称与源仓库相同（`cloud-disk`）。若你已有同名仓库（例如已是 `gsvps/cloud-disk` 的维护者），请在部署页把 **Git 仓库名称** 改成其他名字，例如：
@@ -30,9 +35,9 @@
 > Worker 名称、D1/KV/R2 仍可保持 `cloud-disk` 系列默认值，**不必与 Git 仓库名相同**。
 
 > **若你已有该源码仓库，想直接部署（不 fork）**  
-> 可跳过一键按钮，在 [Cloudflare Dashboard](https://dash.cloudflare.com/) → **Workers & Pages** → **Create** → 连接 GitHub 仓库 `gsvps/cloud-disk`，按 `wrangler.toml` 配置资源后部署即可。
+> 可跳过一键按钮，在 [Cloudflare Dashboard](https://dash.cloudflare.com/) → **Workers & Pages** → **Create** → 连接 GitHub 仓库 `gsvps/cloud-disk`，按 `wrangler.jsonc` 配置资源后部署即可。
 
-点击按钮后，Cloudflare 会读取 `wrangler.toml` 并**自动创建** D1、KV、R2 资源。默认命名如下（KV 与 R2 不可同名，已做区分）：
+点击按钮后，Cloudflare 会读取 `wrangler.jsonc` 并**自动创建** D1、KV、R2 资源。默认命名如下（KV 与 R2 不可同名，已做区分）：
 
 | 资源 | 默认名称 | 说明 |
 |------|----------|------|
@@ -50,17 +55,17 @@
 
 | 参数 | 默认值 | 来源 |
 |------|--------|------|
-| 项目名称 | `CloudDisk` | `wrangler.toml` → `APP_NAME` |
-| Worker 名称 | `cloud-disk` | `wrangler.toml` |
+| 项目名称 | `CloudDisk` | `wrangler.jsonc` → `vars.APP_NAME` |
+| Worker 名称 | `cloud-disk` | `wrangler.jsonc` |
 | 构建命令 | `npm run build` | `package.json` → `scripts.build` |
 | 部署命令 | `npm run deploy` | `package.json` → `scripts.deploy` |
 | 预览部署命令 | `npx wrangler versions upload` | Cloudflare 平台默认 |
 | Node.js 版本 | `22` | `.nvmrc` / `engines.node` |
 | 生产分支 | `main` | 仓库默认分支 |
-| D1 数据库 | `cloud-disk` | `wrangler.toml` |
-| KV 命名空间 | `cloud-disk` | 部署配置页（与 D1 统一） |
-| R2 存储桶 | `cloud-disk-files` | `wrangler.toml` |
-| 环境变量 `APP_NAME` | `CloudDisk` | `wrangler.toml` → `[vars]` |
+| D1 数据库 | `cloud-disk` | `wrangler.jsonc` |
+| KV 命名空间 | `cloud-disk` | 部署页默认与 Worker 名相同 |
+| R2 存储桶 | `cloud-disk-files` | `wrangler.jsonc` |
+| 环境变量 `APP_NAME` | `CloudDisk` | `wrangler.jsonc` → `vars` |
 
 > 说明：D1 与 KV 均使用 `cloud-disk`（不同类型资源可同名）；R2 使用 `cloud-disk-files`，避免与 KV 冲突。
 
@@ -148,7 +153,7 @@ cloud-disk/
 │   └── lib/              # 工具函数
 ├── public/               # 前端静态资源
 ├── migrations/           # D1 迁移
-└── wrangler.toml
+└── wrangler.jsonc
 ```
 
 ## License
