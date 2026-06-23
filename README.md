@@ -33,6 +33,25 @@
 
 部署完成后访问 Workers 域名，首次打开会引导创建管理员账号。
 
+### 高级设置默认值
+
+点击一键部署后，展开「高级设置」时，以下参数会**自动预填**，一般无需修改：
+
+| 参数 | 默认值 | 来源 |
+|------|--------|------|
+| Worker 名称 | `cloud-disk` | `wrangler.toml` |
+| 构建命令 | `npm run build` | `package.json` → `scripts.build` |
+| 部署命令 | `npm run deploy` | `package.json` → `scripts.deploy` |
+| 预览部署命令 | `npx wrangler versions upload` | Cloudflare 平台默认 |
+| Node.js 版本 | `20` | `.nvmrc` / `engines.node` |
+| 生产分支 | `main` | 仓库默认分支 |
+| D1 数据库 | `cloud-disk-db` | `wrangler.toml` |
+| KV 命名空间 | `cloud-disk-KV` | Worker 名 + binding |
+| R2 存储桶 | `cloud-disk-files` | `wrangler.toml` |
+| 环境变量 `APP_NAME` | `CloudDisk` | `wrangler.toml` → `[vars]` |
+
+> 说明：KV 与 R2 不能使用相同名称，因此 R2 默认为 `cloud-disk-files`，KV 默认为 `cloud-disk-KV`。
+
 ### 手动部署步骤
 
 #### 1. Fork 并克隆仓库
