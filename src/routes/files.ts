@@ -24,6 +24,14 @@ import {
 } from '../lib/preview';
 import { createPreviewTicket } from '../lib/preview-ticket';
 import { jsonFail, jsonOk } from '../lib/response';
+import {
+  deleteUploadSession,
+  getUploadSession,
+  saveUploadSession,
+  sessionToStatus,
+  UPLOAD_CHUNK_SIZE,
+  type UploadSession,
+} from '../lib/upload-session';
 import { authMiddleware, type AuthVariables } from '../middleware/auth';
 
 const filesRouter = new Hono<{ Bindings: Env; Variables: AuthVariables }>();
@@ -45,6 +53,22 @@ function toFileDto(record: typeof files.$inferSelect, extra: Record<string, unkn
     editable: !record.isFolder && isEditable(record.mimeType, record.name, record.size),
     ...extra,
   };
+}
+
+async function assertCanUpload(
+  c: Context<{ Bindings: Env; Variables: AuthVariables }>,
+  parentId: string | null
+) {
+  const user = c.get('user');
+  const db = createDb(c.env.DB);
+  const perms = await getUserPermissions(db, user.userId);
+  if (!perms?.canUpload) {
+    return jsonFail(c, 'FORBIDDEN', '当前账号无上传权限', 403);
+  }
+  if (!(await getOwnedParent(db, user.userId, parentId))) {
+    return jsonFail(c, 'NOT_FOUND', '目标文件夹不存在或无写入权限', 404);
+  }
+  return null;
 }
 
 filesRouter.get('/', async (c) => {
@@ -187,9 +211,13 @@ filesRouter.post('/upload', async (c) => {
   const r2Key = `${user.userId}/${id}/${name}`;
   const now = new Date();
 
-  await c.env.R2.put(r2Key, file.stream(), {
-    httpMetadata: { contentType: file.type || 'application/octet-stream' },
-  });
+  try {
+    await c.env.R2.put(r2Key, file.stream(), {
+      httpMetadata: { contentType: file.type || 'application/octet-stream' },
+    });
+  } catch {
+    return jsonFail(c, 'UPLOAD_FAILED', '文件上传失败，请重试', 500);
+  }
 
   await db.insert(files).values({
     id,
@@ -206,6 +234,163 @@ filesRouter.post('/upload', async (c) => {
 
   const [record] = await db.select().from(files).where(eq(files.id, id)).limit(1);
   return jsonOk(c, { file: toFileDto(record!, { permission: 'owner', owned: true }) });
+});
+
+filesRouter.post('/upload/multipart/init', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json<{
+    name?: string;
+    size?: number;
+    parentId?: string | null;
+    mimeType?: string;
+    sessionId?: string;
+  }>();
+
+  if (body.sessionId) {
+    const existing = await getUploadSession(c.env.KV, body.sessionId);
+    if (!existing) return jsonFail(c, 'NOT_FOUND', '上传会话不存在或已过期', 404);
+    if (existing.userId !== user.userId) return jsonFail(c, 'FORBIDDEN', '无权访问该上传会话', 403);
+    return jsonOk(c, sessionToStatus(existing));
+  }
+
+  const name = sanitizeFilename(body.name || '');
+  const totalSize = body.size ?? 0;
+  const parentId = body.parentId ?? null;
+  if (!name) return jsonFail(c, 'BAD_REQUEST', '文件名无效');
+  if (totalSize <= 0) return jsonFail(c, 'BAD_REQUEST', '文件大小无效');
+  if (totalSize < UPLOAD_CHUNK_SIZE) {
+    return jsonFail(c, 'BAD_REQUEST', '小文件请使用普通上传');
+  }
+
+  const denied = await assertCanUpload(c, parentId);
+  if (denied) return denied;
+
+  const sessionId = generateId();
+  const fileId = generateId();
+  const r2Key = `${user.userId}/${fileId}/${name}`;
+  const mimeType = body.mimeType || 'application/octet-stream';
+
+  try {
+    const upload = await c.env.R2.createMultipartUpload(r2Key, {
+      httpMetadata: { contentType: mimeType },
+      customMetadata: { sessionId, fileName: name },
+    });
+    const session: UploadSession = {
+      sessionId,
+      fileId,
+      userId: user.userId,
+      parentId,
+      fileName: name,
+      mimeType,
+      r2Key,
+      r2UploadId: upload.uploadId,
+      totalSize,
+      chunkSize: UPLOAD_CHUNK_SIZE,
+      parts: [],
+      createdAt: Date.now(),
+    };
+    await saveUploadSession(c.env.KV, session);
+    return jsonOk(c, sessionToStatus(session));
+  } catch {
+    return jsonFail(c, 'UPLOAD_FAILED', '无法创建分片上传，请重试', 500);
+  }
+});
+
+filesRouter.get('/upload/multipart/:sessionId', async (c) => {
+  const user = c.get('user');
+  const session = await getUploadSession(c.env.KV, c.req.param('sessionId'));
+  if (!session) return jsonFail(c, 'NOT_FOUND', '上传会话不存在或已过期', 404);
+  if (session.userId !== user.userId) return jsonFail(c, 'FORBIDDEN', '无权访问该上传会话', 403);
+  return jsonOk(c, sessionToStatus(session));
+});
+
+filesRouter.put('/upload/multipart/:sessionId/part/:partNumber', async (c) => {
+  const user = c.get('user');
+  const sessionId = c.req.param('sessionId');
+  const partNumber = Number(c.req.param('partNumber'));
+  if (!Number.isInteger(partNumber) || partNumber < 1) {
+    return jsonFail(c, 'BAD_REQUEST', '无效分片编号');
+  }
+
+  const session = await getUploadSession(c.env.KV, sessionId);
+  if (!session) return jsonFail(c, 'NOT_FOUND', '上传会话不存在或已过期', 404);
+  if (session.userId !== user.userId) return jsonFail(c, 'FORBIDDEN', '无权访问该上传会话', 403);
+  if (session.parts.some((p) => p.partNumber === partNumber)) {
+    return jsonOk(c, { partNumber, uploaded: true });
+  }
+
+  const totalParts = Math.ceil(session.totalSize / session.chunkSize);
+  if (partNumber > totalParts) return jsonFail(c, 'BAD_REQUEST', '分片编号超出范围');
+
+  const chunk = await c.req.arrayBuffer();
+  if (!chunk.byteLength) return jsonFail(c, 'BAD_REQUEST', '分片内容为空');
+
+  try {
+    const multipart = c.env.R2.resumeMultipartUpload(session.r2Key, session.r2UploadId);
+    const uploaded = await multipart.uploadPart(partNumber, chunk);
+    session.parts.push({ partNumber, etag: uploaded.etag });
+    session.parts.sort((a, b) => a.partNumber - b.partNumber);
+    await saveUploadSession(c.env.KV, session);
+    return jsonOk(c, { partNumber, etag: uploaded.etag });
+  } catch {
+    return jsonFail(c, 'UPLOAD_FAILED', '分片上传失败，请重试', 500);
+  }
+});
+
+filesRouter.post('/upload/multipart/:sessionId/complete', async (c) => {
+  const user = c.get('user');
+  const sessionId = c.req.param('sessionId');
+  const session = await getUploadSession(c.env.KV, sessionId);
+  if (!session) return jsonFail(c, 'NOT_FOUND', '上传会话不存在或已过期', 404);
+  if (session.userId !== user.userId) return jsonFail(c, 'FORBIDDEN', '无权访问该上传会话', 403);
+
+  const totalParts = Math.ceil(session.totalSize / session.chunkSize);
+  if (session.parts.length !== totalParts) {
+    return jsonFail(c, 'BAD_REQUEST', '分片尚未全部上传完成');
+  }
+
+  try {
+    const multipart = c.env.R2.resumeMultipartUpload(session.r2Key, session.r2UploadId);
+    await multipart.complete(session.parts);
+  } catch {
+    return jsonFail(c, 'UPLOAD_FAILED', '合并分片失败，请重试', 500);
+  }
+
+  const db = createDb(c.env.DB);
+  const now = new Date();
+  await db.insert(files).values({
+    id: session.fileId,
+    userId: user.userId,
+    parentId: session.parentId,
+    name: session.fileName,
+    isFolder: false,
+    r2Key: session.r2Key,
+    size: session.totalSize,
+    mimeType: session.mimeType,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await deleteUploadSession(c.env.KV, sessionId);
+  const [record] = await db.select().from(files).where(eq(files.id, session.fileId)).limit(1);
+  return jsonOk(c, { file: toFileDto(record!, { permission: 'owner', owned: true }) });
+});
+
+filesRouter.delete('/upload/multipart/:sessionId', async (c) => {
+  const user = c.get('user');
+  const sessionId = c.req.param('sessionId');
+  const session = await getUploadSession(c.env.KV, sessionId);
+  if (!session) return jsonOk(c, { aborted: true });
+  if (session.userId !== user.userId) return jsonFail(c, 'FORBIDDEN', '无权访问该上传会话', 403);
+
+  try {
+    const multipart = c.env.R2.resumeMultipartUpload(session.r2Key, session.r2UploadId);
+    await multipart.abort();
+  } catch {
+    // ignore abort errors for stale uploads
+  }
+  await deleteUploadSession(c.env.KV, sessionId);
+  return jsonOk(c, { aborted: true });
 });
 
 filesRouter.get('/:id/preview-info', async (c) => {

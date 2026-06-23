@@ -28,7 +28,7 @@
 > **若部署页仍显示旧名称（如 `cloud-disk-db`）**  
 > 部署页会缓存配置。请**关闭旧标签页**，用无痕窗口重新打开上方按钮，或访问：  
 > https://deploy.workers.cloudflare.com/?url=https://github.com/gsvps/cloud-disk/tree/main  
-> 在「Configure resources」步骤只需确认：**D1** = `cloud-disk`，**R2** = `cloud-disk-files`。**KV 不会出现在此步骤**，首次部署时由 `wrangler deploy` 自动创建并绑定（命名通常为 `{Worker名}-kv`）。**项目名称 / Worker 名称 / `APP_NAME` 默认留空，请按需自行填写**（留空 `APP_NAME` 时界面显示 `CloudDisk`）。
+> 在「Configure resources」步骤确认：**D1** = `cloud-disk`，**KV** = `cloud-disk`，**R2** = `cloud-disk-files`。**项目名称 / Worker 名称 / `APP_NAME` 默认留空，请按需自行填写**（留空 `APP_NAME` 时界面显示 `CloudDisk`）。
 
 > **若提示「已存在具有该名称的存储库」**  
 > 一键部署会在你的 GitHub 账号下**新建一个 fork 仓库**。本项目**不再预填项目名称**，请在部署页自行填写 Git 仓库名称（例如 `my-cloud-disk`）。若你已有源码仓库，建议**跳过一键按钮**，改用 Dashboard 连接已有仓库（见下文）。
@@ -36,14 +36,14 @@
 > **若你已有该源码仓库，想直接部署（不 fork）**  
 > 可跳过一键按钮，在 [Cloudflare Dashboard](https://dash.cloudflare.com/) → **Workers & Pages** → **Create** → 连接 GitHub 仓库 `gsvps/cloud-disk`，按 `wrangler.toml` 配置资源后部署即可。
 
-点击按钮后，Cloudflare 会读取 `wrangler.toml` 并**自动创建** D1、R2；**KV 不在部署页配置**，由 Wrangler 在首次 `wrangler deploy` 时自动创建。默认命名如下：
+点击按钮后，Cloudflare 会读取 `wrangler.toml` 并**自动创建** D1、KV、R2。默认命名如下：
 
 | 资源 | 默认名称 | 说明 |
 |------|----------|------|
 | 项目名称 / Worker 名称 | **留空（需自填）** | 不在仓库中预填；部署页由用户指定 |
 | 应用显示名 `APP_NAME` | **留空（可选）** | 留空时界面默认显示 `CloudDisk` |
 | D1 | `cloud-disk` | 用户与文件元数据（`wrangler.toml` 指定） |
-| KV | **`{Worker名}-kv`** | 登录会话；部署页不显示，Wrangler 自动创建 |
+| KV | `cloud-disk` | 登录会话（与 D1 同名，类型不同不冲突） |
 | R2 | `cloud-disk-files` | 上传文件（`wrangler.toml` 指定） |
 
 部署完成后访问 Workers 域名，首次打开会引导创建管理员账号。
@@ -62,10 +62,10 @@
 | Node.js 版本 | `22` | `.nvmrc` / `engines.node` |
 | 生产分支 | `main` | 仓库默认分支 |
 | D1 数据库 | `cloud-disk` | `wrangler.toml` |
-| KV 命名空间 | **`{Worker名}-kv`（自动）** | 部署页不显示；`wrangler deploy` 自动创建 |
+| KV 命名空间 | `cloud-disk` | `package.json` / 部署页默认 |
 | R2 存储桶 | `cloud-disk-files` | `wrangler.toml` |
 
-> 说明：D1、R2 名称在 `wrangler.toml` 中固定；KV 仅声明 binding，不在一键部署 Configure resources 中出现，由 Wrangler 按 Worker 名自动 provisioning。
+> 说明：D1、KV、R2 默认名称已在仓库中预填；部署页一般保持默认即可。
 
 #### 高级设置里其他字段要不要管？
 
@@ -94,10 +94,11 @@ npx wrangler login
 
 #### 3. 创建 Cloudflare 资源（可选）
 
-D1、R2 可按需预先创建；**KV 无需预先创建**，首次 `wrangler deploy` 会自动生成（命名 `{Worker名}-kv`）。
+D1、KV、R2 可按需预先创建，或使用部署页自动创建：
 
 ```bash
 npx wrangler d1 create cloud-disk
+npx wrangler kv namespace create cloud-disk
 npx wrangler r2 bucket create cloud-disk-files
 ```
 

@@ -116,6 +116,19 @@
     @apply min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-mono text-xs text-slate-600;
   }
 
+  .upload-panel {
+    @apply border-brand-100 bg-white/95;
+  }
+  .upload-progress-track {
+    @apply h-2 overflow-hidden rounded-full bg-slate-100;
+  }
+  .upload-progress-bar {
+    @apply h-full rounded-full bg-gradient-to-r from-brand-500 to-indigo-500 transition-[width] duration-150;
+  }
+  .upload-item {
+    @apply rounded-xl border border-slate-100 bg-slate-50/80 p-3;
+  }
+
   .edit-textarea {
     @apply h-full min-h-0 w-full resize-none rounded-none border-0 bg-slate-900 px-4 py-3 font-mono text-sm leading-relaxed text-slate-100 outline-none focus:ring-0;
   }
@@ -125,6 +138,56 @@
   }
   .site-footer a {
     @apply text-slate-500 transition-colors hover:text-brand-600;
+  }
+
+  .cf-limits summary {
+    @apply list-none;
+  }
+  .cf-limits summary::-webkit-details-marker {
+    display: none;
+  }
+  .cf-limits a {
+    @apply ml-1 text-brand-600 hover:underline;
+  }
+
+  .toast-host {
+    @apply pointer-events-none fixed right-4 top-4 z-[100] flex w-full max-w-sm flex-col gap-2;
+  }
+  .toast {
+    @apply pointer-events-auto flex items-start gap-3 rounded-xl border bg-white px-4 py-3 shadow-lg shadow-slate-300/40;
+  }
+  .toast-success {
+    @apply border-emerald-200 bg-emerald-50;
+  }
+  .toast-error {
+    @apply border-red-200 bg-red-50;
+  }
+  .toast-warning {
+    @apply border-amber-200 bg-amber-50;
+  }
+  .toast-info {
+    @apply border-sky-200 bg-sky-50;
+  }
+  .toast-icon {
+    @apply flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold;
+  }
+  .toast-success .toast-icon {
+    @apply bg-emerald-500 text-white;
+  }
+  .toast-error .toast-icon {
+    @apply bg-red-500 text-white;
+  }
+  .toast-warning .toast-icon {
+    @apply bg-amber-500 text-white;
+  }
+  .toast-info .toast-icon {
+    @apply bg-sky-500 text-white;
+  }
+  .toast-msg {
+    @apply min-w-0 flex-1 pt-0.5 text-sm leading-snug text-slate-700;
+  }
+  .toast-close {
+    @apply shrink-0 rounded-lg px-1.5 text-lg leading-none text-slate-400 hover:bg-black/5 hover:text-slate-600;
   }
 
   .user-pill {

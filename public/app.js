@@ -16,6 +16,7 @@ const state = {
   breadcrumbs: [{ id: null, name: '全部文件' }],
   loading: true,
   uploading: false,
+  uploadQueue: null,
   error: '',
   modal: null,
   sharePage: null,
@@ -36,23 +37,105 @@ const state = {
   showGroupForm: false,
 };
 
+const toasts = [];
+let toastSeq = 0;
+const toastTimers = new Map();
+
+const CF_DOCS = {
+  workers: 'https://developers.cloudflare.com/workers/platform/pricing/',
+  workersLimits: 'https://developers.cloudflare.com/workers/platform/limits/',
+  d1: 'https://developers.cloudflare.com/d1/platform/pricing/',
+  r2: 'https://developers.cloudflare.com/r2/pricing/',
+  kv: 'https://developers.cloudflare.com/kv/platform/limits/',
+};
+const UPLOAD_CHUNK_SIZE = 5 * 1024 * 1024;
+const PENDING_UPLOADS_KEY = 'clouddisk-pending-uploads';
+
+function showToast(message, type = 'info', duration = 4500) {
+  if (!message) return;
+  const id = ++toastSeq;
+  toasts.push({ id, type, message: String(message) });
+  paintToasts();
+  const timer = setTimeout(() => removeToast(id), duration);
+  toastTimers.set(id, timer);
+}
+
+function removeToast(id) {
+  const timer = toastTimers.get(id);
+  if (timer) clearTimeout(timer);
+  toastTimers.delete(id);
+  const idx = toasts.findIndex((t) => t.id === id);
+  if (idx >= 0) toasts.splice(idx, 1);
+  paintToasts();
+}
+
+function paintToasts() {
+  let host = document.getElementById('toast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'toast-host';
+    host.className = 'toast-host';
+    host.setAttribute('aria-live', 'polite');
+    document.body.appendChild(host);
+  }
+  if (!toasts.length) {
+    host.innerHTML = '';
+    return;
+  }
+  const icons = { success: '✓', error: '✕', warning: '!', info: 'ℹ' };
+  host.innerHTML = toasts
+    .map(
+      (t) => `<div class="toast toast-${t.type}" role="alert">
+        <span class="toast-icon" aria-hidden="true">${icons[t.type] || 'ℹ'}</span>
+        <p class="toast-msg">${esc(t.message)}</p>
+        <button type="button" class="toast-close" data-toast-close="${t.id}" aria-label="关闭">×</button>
+      </div>`
+    )
+    .join('');
+  host.querySelectorAll('[data-toast-close]').forEach((btn) => {
+    btn.addEventListener('click', () => removeToast(Number(btn.dataset.toastClose)));
+  });
+}
+
+function notifyError(err, fallback = '操作失败') {
+  const message = err?.message || fallback;
+  showToast(message, 'error');
+  return message;
+}
+
 async function api(path, options = {}) {
+  const { silent = false, ...fetchOptions } = options;
   const headers = { ...(options.headers || {}) };
-  if (!(options.body instanceof FormData)) {
+  if (!(options.body instanceof FormData) && !(options.body instanceof ArrayBuffer)) {
     headers['Content-Type'] = headers['Content-Type'] || 'application/json';
   }
   if (state.shareAccessToken) {
     headers['X-Share-Access'] = state.shareAccessToken;
   }
 
-  const res = await fetch(`${API}${path}`, { credentials: 'include', ...options, headers });
+  let res;
+  try {
+    res = await fetch(`${API}${path}`, { credentials: 'include', ...fetchOptions, headers });
+  } catch {
+    const message = '网络错误，请检查连接后重试';
+    if (!silent) showToast(message, 'error');
+    throw new Error(message);
+  }
 
   if (res.headers.get('content-type')?.includes('application/json')) {
     const data = await res.json();
-    if (!data.success) throw new Error(data.error?.message || '请求失败');
+    if (!data.success) {
+      const message = data.error?.message || '请求失败';
+      if (!silent) showToast(message, 'error');
+      throw new Error(message);
+    }
     return data.data;
   }
-  if (!res.ok) throw new Error('请求失败');
+  if (!res.ok) {
+    const message = `请求失败 (${res.status})`;
+    if (!silent) showToast(message, 'error');
+    throw new Error(message);
+  }
   return res;
 }
 
@@ -74,8 +157,9 @@ function formatDate(iso) {
   return new Date(iso).toLocaleString('zh-CN');
 }
 
-function setError(msg) {
+function setError(msg, { toast = false } = {}) {
   state.error = msg;
+  if (msg && toast) showToast(msg, 'error', 6000);
   render();
 }
 
@@ -280,6 +364,7 @@ async function submitNewFolder(form) {
   });
   closeModal();
   await loadFiles();
+  showToast(`文件夹「${name}」已创建`, 'success');
   render();
 }
 
@@ -292,6 +377,7 @@ async function submitNewFile(form) {
   });
   closeModal();
   await loadFiles();
+  showToast(`文件「${name}」已创建`, 'success');
   render();
 }
 
@@ -299,24 +385,258 @@ async function createFolder() {
   openNewFolderModal();
 }
 
+function fileUploadFingerprint(file, parentId) {
+  return `${file.name}:${file.size}:${file.lastModified}:${parentId || ''}`;
+}
+
+function loadPendingUploads() {
+  try {
+    return JSON.parse(localStorage.getItem(PENDING_UPLOADS_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function savePendingUploads(list) {
+  localStorage.setItem(PENDING_UPLOADS_KEY, JSON.stringify(list));
+}
+
+function upsertPendingUpload(entry) {
+  const list = loadPendingUploads().filter((e) => e.sessionId !== entry.sessionId);
+  list.push(entry);
+  savePendingUploads(list);
+}
+
+function removePendingUpload(sessionId) {
+  savePendingUploads(loadPendingUploads().filter((e) => e.sessionId !== sessionId));
+}
+
+function updateUploadProgressDom() {
+  if (!state.uploadQueue) return;
+  const pct = state.uploadQueue.totalSize
+    ? Math.min(100, Math.round((state.uploadQueue.totalLoaded / state.uploadQueue.totalSize) * 100))
+    : 0;
+  const bar = document.getElementById('upload-overall-bar');
+  const text = document.getElementById('upload-overall-text');
+  if (bar) bar.style.width = `${pct}%`;
+  if (text) {
+    text.textContent = `${formatBytes(state.uploadQueue.totalLoaded)} / ${formatBytes(state.uploadQueue.totalSize)} · ${pct}%`;
+  }
+  state.uploadQueue.items.forEach((item, i) => {
+    const rowBar = document.getElementById(`upload-item-bar-${i}`);
+    const rowText = document.getElementById(`upload-item-text-${i}`);
+    const itemPct = item.size ? Math.min(100, Math.round((item.loaded / item.size) * 100)) : 0;
+    if (rowBar) rowBar.style.width = `${itemPct}%`;
+    if (rowText) {
+      const statusLabel =
+        item.status === 'done' ? '完成' : item.status === 'error' ? '失败' : item.status === 'uploading' ? '上传中' : '等待';
+      rowText.textContent = `${statusLabel} · ${itemPct}%`;
+    }
+  });
+}
+
+function renderUploadPanel() {
+  if (!state.uploadQueue) return '';
+  const rows = state.uploadQueue.items
+    .map(
+      (item, i) => `<div class="upload-item">
+        <div class="mb-1 flex items-center justify-between gap-2 text-sm">
+          <span class="truncate font-medium text-slate-700">${esc(item.name)}</span>
+          <span id="upload-item-text-${i}" class="shrink-0 text-xs text-slate-500">${item.status === 'error' ? esc(item.error || '失败') : '等待'}</span>
+        </div>
+        <div class="upload-progress-track"><div id="upload-item-bar-${i}" class="upload-progress-bar" style="width:0%"></div></div>
+      </div>`
+    )
+    .join('');
+  return `<div class="upload-panel card mb-4 p-4">
+    <div class="mb-3 flex items-center justify-between gap-3">
+      <div>
+        <p class="font-medium text-slate-800">文件上传</p>
+        <p id="upload-overall-text" class="text-xs text-slate-500">准备中...</p>
+      </div>
+      ${state.uploadQueue.items.some((i) => i.status === 'error') ? '<span class="text-xs text-red-500">部分失败可重新选择文件续传</span>' : ''}
+    </div>
+    <div class="upload-progress-track mb-3"><div id="upload-overall-bar" class="upload-progress-bar" style="width:0%"></div></div>
+    <div class="space-y-3">${rows}</div>
+  </div>`;
+}
+
+function uploadSimpleFile(file, parentId, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API}/files/upload`);
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded, e.total);
+    };
+    xhr.onload = () => {
+      try {
+        const data = JSON.parse(xhr.responseText);
+        if (!data.success) reject(new Error(data.error?.message || '上传失败'));
+        else resolve(data.data);
+      } catch {
+        reject(new Error('上传失败'));
+      }
+    };
+    xhr.onerror = () => reject(new Error('网络错误，上传中断'));
+    xhr.onabort = () => reject(new Error('上传已取消'));
+    const fd = new FormData();
+    fd.append('file', file);
+    if (parentId) fd.append('parentId', parentId);
+    xhr.send(fd);
+  });
+}
+
+function uploadPart(sessionId, partNumber, chunk, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', `${API}/files/upload/multipart/${sessionId}/part/${partNumber}`);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded, e.total);
+    };
+    xhr.onload = () => {
+      try {
+        const data = JSON.parse(xhr.responseText);
+        if (!data.success) reject(new Error(data.error?.message || '分片上传失败'));
+        else resolve(data.data);
+      } catch {
+        reject(new Error('分片上传失败'));
+      }
+    };
+    xhr.onerror = () => reject(new Error('网络错误，分片上传中断'));
+    xhr.send(chunk);
+  });
+}
+
+function bytesUploadedForParts(fileSize, chunkSize, uploadedParts) {
+  const totalParts = Math.ceil(fileSize / chunkSize);
+  let loaded = 0;
+  for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+    if (!uploadedParts.has(partNumber)) continue;
+    const start = (partNumber - 1) * chunkSize;
+    loaded += Math.min(chunkSize, fileSize - start);
+  }
+  return loaded;
+}
+
+async function uploadMultipartFile(file, parentId, onProgress, resumeSessionId) {
+  const session = await api('/files/upload/multipart/init', {
+    method: 'POST',
+    body: JSON.stringify(
+      resumeSessionId
+        ? { sessionId: resumeSessionId }
+        : {
+            name: file.name,
+            size: file.size,
+            parentId,
+            mimeType: file.type || 'application/octet-stream',
+          }
+    ),
+  });
+
+  if (!resumeSessionId) {
+    upsertPendingUpload({
+      sessionId: session.sessionId,
+      fingerprint: fileUploadFingerprint(file, parentId),
+      fileName: file.name,
+      fileSize: file.size,
+      parentId,
+    });
+  }
+
+  const chunkSize = session.chunkSize || UPLOAD_CHUNK_SIZE;
+  const totalParts = Math.ceil(file.size / chunkSize);
+  const uploadedSet = new Set(session.uploadedParts || []);
+  let baseLoaded = bytesUploadedForParts(file.size, chunkSize, uploadedSet);
+  onProgress(baseLoaded, file.size);
+
+  for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+    if (uploadedSet.has(partNumber)) continue;
+    const start = (partNumber - 1) * chunkSize;
+    const end = Math.min(start + chunkSize, file.size);
+    const chunk = file.slice(start, end);
+    await uploadPart(session.sessionId, partNumber, chunk, (partLoaded) => {
+      onProgress(baseLoaded + partLoaded, file.size);
+    });
+    baseLoaded += end - start;
+    onProgress(baseLoaded, file.size);
+  }
+
+  const result = await api(`/files/upload/multipart/${session.sessionId}/complete`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+  removePendingUpload(session.sessionId);
+  return result;
+}
+
 async function uploadFiles(fileList) {
   if (!fileList.length) return;
+  const parentId = state.currentParentId;
+  const list = [...fileList];
+  const pending = loadPendingUploads();
+
+  state.uploadQueue = {
+    items: list.map((f) => ({ name: f.name, size: f.size, loaded: 0, status: 'pending', error: '' })),
+    totalLoaded: 0,
+    totalSize: list.reduce((sum, f) => sum + f.size, 0),
+  };
   state.uploading = true;
+  clearError();
   render();
-  try {
-    for (const file of fileList) {
-      const fd = new FormData();
-      fd.append('file', file);
-      if (state.currentParentId) fd.append('parentId', state.currentParentId);
-      await api('/files/upload', { method: 'POST', body: fd });
+  updateUploadProgressDom();
+
+  const errors = [];
+  for (let i = 0; i < list.length; i++) {
+    const file = list[i];
+    state.uploadQueue.items[i].status = 'uploading';
+    updateUploadProgressDom();
+    try {
+      const fingerprint = fileUploadFingerprint(file, parentId);
+      const resumed = pending.find((p) => p.fingerprint === fingerprint);
+      const trackProgress = (loaded) => {
+        state.uploadQueue.items[i].loaded = loaded;
+        state.uploadQueue.totalLoaded = state.uploadQueue.items.reduce((sum, item) => sum + item.loaded, 0);
+        updateUploadProgressDom();
+      };
+      if (file.size >= UPLOAD_CHUNK_SIZE) {
+        await uploadMultipartFile(file, parentId, trackProgress, resumed?.sessionId);
+      } else {
+        await uploadSimpleFile(file, parentId, trackProgress);
+      }
+      state.uploadQueue.items[i].status = 'done';
+      state.uploadQueue.items[i].loaded = file.size;
+      state.uploadQueue.totalLoaded = state.uploadQueue.items.reduce((sum, item) => sum + item.loaded, 0);
+      updateUploadProgressDom();
+    } catch (err) {
+      state.uploadQueue.items[i].status = 'error';
+      state.uploadQueue.items[i].error = err.message;
+      errors.push(`${file.name}：${err.message}`);
+      updateUploadProgressDom();
     }
-    await loadFiles();
-  } catch (err) {
-    setError(err.message);
-  } finally {
-    state.uploading = false;
-    render();
   }
+
+  state.uploading = false;
+  await loadFiles();
+  const okCount = list.length - errors.length;
+  if (okCount && !errors.length) {
+    showToast(
+      okCount === 1 ? `「${list[0].name}」上传成功` : `成功上传 ${okCount} 个文件`,
+      'success'
+    );
+  } else if (okCount && errors.length) {
+    showToast(`已上传 ${okCount} 个，${errors.length} 个失败`, 'warning', 7000);
+    showToast(errors.join('；'), 'error', 8000);
+  } else if (errors.length) {
+    showToast(errors.length === 1 ? errors[0] : `全部上传失败：${errors.join('；')}`, 'error', 8000);
+  }
+  setTimeout(() => {
+    state.uploadQueue = null;
+    render();
+  }, errors.length ? 10000 : 2500);
+  render();
 }
 
 function downloadFile(id) {
@@ -358,6 +678,19 @@ function renderFooter() {
         <span class="hidden text-slate-300 sm:inline">·</span>
         <a href="${SITE.github}" target="_blank" rel="noopener noreferrer">GitHub文档 ${SITE.github}</a>
       </div>
+      <details class="cf-limits mx-auto mt-4 max-w-3xl text-left">
+        <summary class="cursor-pointer text-xs font-medium text-slate-500 hover:text-brand-600">Cloudflare 免费套餐 · 本项目所用资源限额（参考官方说明）</summary>
+        <div class="mt-3 rounded-xl border border-slate-200/80 bg-slate-50/90 px-4 py-3 text-xs leading-relaxed text-slate-600">
+          <p class="mb-2 text-slate-500">以下为 Workers 免费计划默认配额，超限后对应操作会失败；Workers / KV / D1 的每日限额于 <strong>UTC 0:00</strong> 重置，R2 为月度配额。</p>
+          <ul class="space-y-2">
+            <li><strong class="text-slate-700">Workers</strong>（API 与页面）：请求 <strong>10 万次/天</strong>（单脚本）；CPU <strong>10 ms/次</strong>；单次请求体最大 <strong>100 MB</strong>；子请求 <strong>50 次/调用</strong>（访问 R2/KV/D1 等）。<a href="${CF_DOCS.workersLimits}" target="_blank" rel="noopener noreferrer">限制说明</a> · <a href="${CF_DOCS.workers}" target="_blank" rel="noopener noreferrer">定价</a></li>
+            <li><strong class="text-slate-700">D1</strong>（用户与文件元数据）：读 <strong>500 万行/天</strong>；写 <strong>10 万行/天</strong>；总存储 <strong>5 GB</strong>。<a href="${CF_DOCS.d1}" target="_blank" rel="noopener noreferrer">D1 定价</a></li>
+            <li><strong class="text-slate-700">R2</strong>（文件存储）：存储 <strong>10 GB·月/月</strong>；Class A 操作 <strong>100 万次/月</strong>（上传/列举等）；Class B 操作 <strong>1000 万次/月</strong>（下载/读取等）；<strong>出站流量免费</strong>。<a href="${CF_DOCS.r2}" target="_blank" rel="noopener noreferrer">R2 定价</a></li>
+            <li><strong class="text-slate-700">KV</strong>（登录会话、分享令牌、上传断点）：读 <strong>10 万次/天</strong>；写/删各 <strong>1000 次/天</strong>；总存储 <strong>1 GB</strong>；单值最大 <strong>25 MiB</strong>。<a href="${CF_DOCS.kv}" target="_blank" rel="noopener noreferrer">KV 限制</a></li>
+          </ul>
+          <p class="mt-2 text-slate-500">个人网盘在免费额度内通常足够；若出现配额错误，可升级 Workers Paid（$5/月起）或优化使用。数据以 Cloudflare 官方文档为准。</p>
+        </div>
+      </details>
     </div>
   </footer>`;
 }
@@ -414,8 +747,7 @@ function openPreviewModal(id, name, mime) {
         render();
       }
     })
-    .catch((err) => {
-      alert(err.message);
+    .catch(() => {
       closeModal();
     });
 }
@@ -452,27 +784,31 @@ async function submitShare(form) {
     }),
   });
   state.modal.result = data.share;
+  showToast('分享链接已创建', 'success');
   render();
 }
 
 async function submitCollab(form) {
+  const username = form.username.value.trim();
   await api(`/files/${state.modal.fileId}/collaborators`, {
     method: 'POST',
     body: JSON.stringify({
-      username: form.username.value.trim(),
+      username,
       permission: form.permission.value,
     }),
   });
-  const d = await api(`/files/${state.modal.fileId}/collaborators`);
+  const d = await api(`/files/${state.modal.fileId}/collaborators`, { silent: true });
   state.modal.collaborators = d.collaborators;
   form.username.value = '';
+  showToast(`已添加协作者「${username}」`, 'success');
   render();
 }
 
 async function removeCollab(collaboratorId) {
   await api(`/files/${state.modal.fileId}/collaborators/${collaboratorId}`, { method: 'DELETE' });
-  const d = await api(`/files/${state.modal.fileId}/collaborators`);
+  const d = await api(`/files/${state.modal.fileId}/collaborators`, { silent: true });
   state.modal.collaborators = d.collaborators;
+  showToast('协作者已移除', 'success');
   render();
 }
 
@@ -502,11 +838,11 @@ async function navigateShareFolder(index) {
 
 async function openShareFileEdit(fileId) {
   const d = await api(`/share/${state.sharePage}/files/${fileId}/content`);
-  if (!d.editable) return alert('该文件不支持编辑');
+  if (!d.editable) return showToast('该文件不支持编辑', 'warning');
   const content = prompt('编辑内容', d.content);
   if (content === null) return;
   await api(`/share/${state.sharePage}/files/${fileId}/content`, { method: 'PUT', body: JSON.stringify({ content }) });
-  alert('已保存');
+  showToast('已保存', 'success');
 }
 
 async function openShareFilePreview(file) {
@@ -520,9 +856,8 @@ async function openShareFilePreview(file) {
       previewLink: resolvePreviewLink(info, file.id, state.sharePage),
       loading: false,
     };
-  } catch (err) {
+  } catch {
     state.sharePreviewFile = null;
-    alert(err.message);
   }
   render();
 }
@@ -535,6 +870,7 @@ async function saveEditContent() {
   });
   closeModal();
   await loadFiles();
+  showToast('文件已保存', 'success');
   render();
 }
 
@@ -570,6 +906,7 @@ async function verifySharePassword(form) {
     state.shareFolderBreadcrumbs = [{ id: null, name: state.shareInfo.name }];
     await loadShareFolderFiles(null);
   }
+  showToast('验证成功', 'success');
   render();
 }
 
@@ -772,7 +1109,7 @@ async function savePassword(form) {
     }),
   });
   form.reset();
-  alert('密码已更新');
+  showToast('密码已更新', 'success');
 }
 
 async function saveRegistrationSetting(open) {
@@ -782,14 +1119,16 @@ async function saveRegistrationSetting(open) {
   });
   state.adminSettings = { registrationOpen: open };
   state.registrationOpen = open;
+  showToast(open ? '已开放注册' : '已关闭注册', 'success');
   render();
 }
 
 async function submitNewUser(form) {
+  const username = form.username.value.trim();
   await api('/admin/users', {
     method: 'POST',
     body: JSON.stringify({
-      username: form.username.value.trim(),
+      username,
       password: form.password.value,
       role: form.role.value,
       groupId: form.role.value === 'admin' ? null : form.groupId.value || 'grp_default',
@@ -797,6 +1136,7 @@ async function submitNewUser(form) {
     }),
   });
   state.showUserForm = false;
+  showToast(`用户「${username}」已创建`, 'success');
   await loadSettingsData();
 }
 
@@ -810,20 +1150,23 @@ async function submitEditUser(form, userId) {
   if (form.password.value) body.password = form.password.value;
   await api(`/admin/users/${userId}`, { method: 'PATCH', body: JSON.stringify(body) });
   state.editingUserId = null;
+  showToast('用户信息已更新', 'success');
   await loadSettingsData();
 }
 
 async function deleteAdminUser(userId, username) {
   if (!confirm(`确定删除用户「${username}」？`)) return;
   await api(`/admin/users/${userId}`, { method: 'DELETE' });
+  showToast(`用户「${username}」已删除`, 'success');
   await loadSettingsData();
 }
 
 async function submitNewGroup(form) {
+  const name = form.name.value.trim();
   await api('/admin/groups', {
     method: 'POST',
     body: JSON.stringify({
-      name: form.name.value.trim(),
+      name,
       description: form.description.value.trim() || undefined,
       canUpload: form.canUpload.checked,
       canShare: form.canShare.checked,
@@ -832,6 +1175,7 @@ async function submitNewGroup(form) {
     }),
   });
   state.showGroupForm = false;
+  showToast(`用户组「${name}」已创建`, 'success');
   await loadSettingsData();
 }
 
@@ -848,12 +1192,14 @@ async function submitEditGroup(form, groupId) {
     }),
   });
   state.editingGroupId = null;
+  showToast('用户组已更新', 'success');
   await loadSettingsData();
 }
 
 async function deleteAdminGroup(groupId, name) {
   if (!confirm(`确定删除用户组「${name}」？组内用户将移至默认用户组。`)) return;
   await api(`/admin/groups/${groupId}`, { method: 'DELETE' });
+  showToast(`用户组「${name}」已删除`, 'success');
   await loadSettingsData();
 }
 
@@ -1145,6 +1491,8 @@ function renderMain() {
     </div>`)}
     <main class="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
       ${state.error ? `<div class="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-600">${esc(state.error)}</div>` : ''}
+      ${renderUploadPanel()}
+      ${loadPendingUploads().length && !state.uploadQueue ? `<div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">检测到未完成的大文件上传，重新选择相同文件可自动续传。</div>` : ''}
       <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div class="scope-tabs">
           <button class="scope-tab ${state.scope === 'mine' ? 'scope-tab-active' : ''}" data-scope="mine">我的文件</button>
@@ -1408,10 +1756,10 @@ function bindSettingsEvents() {
   });
   document.getElementById('password-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
-    savePassword(e.target).catch((err) => alert(err.message));
+    savePassword(e.target).catch(() => {});
   });
   document.getElementById('registration-open')?.addEventListener('change', (e) => {
-    saveRegistrationSetting(e.target.checked).catch((err) => alert(err.message));
+    saveRegistrationSetting(e.target.checked).catch(() => {});
   });
   document.getElementById('show-user-form-btn')?.addEventListener('click', () => {
     state.showUserForm = true;
@@ -1439,13 +1787,13 @@ function bindSettingsEvents() {
   });
   document.getElementById('new-user-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
-    submitNewUser(e.target).catch((err) => alert(err.message));
+    submitNewUser(e.target).catch(() => {});
   });
   document.querySelectorAll('[id^="edit-user-form-"]').forEach((form) => {
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const userId = form.id.replace('edit-user-form-', '');
-      submitEditUser(form, userId).catch((err) => alert(err.message));
+      submitEditUser(form, userId).catch(() => {});
     });
   });
   document.querySelectorAll('[data-edit-user]').forEach((el) => {
@@ -1457,18 +1805,18 @@ function bindSettingsEvents() {
   });
   document.querySelectorAll('[data-del-user]').forEach((el) => {
     el.addEventListener('click', () =>
-      deleteAdminUser(el.dataset.delUser, el.dataset.username).catch((err) => alert(err.message))
+      deleteAdminUser(el.dataset.delUser, el.dataset.username).catch(() => {})
     );
   });
   document.getElementById('new-group-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
-    submitNewGroup(e.target).catch((err) => alert(err.message));
+    submitNewGroup(e.target).catch(() => {});
   });
   document.querySelectorAll('[id^="edit-group-form-"]').forEach((form) => {
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const groupId = form.id.replace('edit-group-form-', '');
-      submitEditGroup(form, groupId).catch((err) => alert(err.message));
+      submitEditGroup(form, groupId).catch(() => {});
     });
   });
   document.querySelectorAll('[data-edit-group]').forEach((el) => {
@@ -1480,7 +1828,7 @@ function bindSettingsEvents() {
   });
   document.querySelectorAll('[data-del-group]').forEach((el) => {
     el.addEventListener('click', () =>
-      deleteAdminGroup(el.dataset.delGroup, el.dataset.name).catch((err) => alert(err.message))
+      deleteAdminGroup(el.dataset.delGroup, el.dataset.name).catch(() => {})
     );
   });
 }
@@ -1488,28 +1836,28 @@ function bindSettingsEvents() {
 function bindSharePageEvents() {
   document.getElementById('share-pwd-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
-    verifySharePassword(e.target).catch((err) => alert(err.message));
+    verifySharePassword(e.target).catch(() => {});
   });
   document.getElementById('share-edit-btn')?.addEventListener('click', async () => {
     const d = await api(`/share/${state.sharePage}/content`);
-    if (!d.editable) return alert('该文件不支持编辑');
+    if (!d.editable) return showToast('该文件不支持编辑', 'warning');
     const content = prompt('编辑内容', d.content);
     if (content === null) return;
     await api(`/share/${state.sharePage}/content`, { method: 'PUT', body: JSON.stringify({ content }) });
-    alert('已保存');
+    showToast('已保存', 'success');
   });
   document.getElementById('copy-share-preview-link')?.addEventListener('click', async () => {
     const input = document.getElementById('share-preview-link');
     if (input?.value) {
       await copyToClipboard(input.value);
-      alert('链接已复制');
+      showToast('链接已复制', 'success');
     }
   });
   document.getElementById('copy-share-file-preview-link')?.addEventListener('click', async () => {
     const input = document.getElementById('share-file-preview-link');
     if (input?.value) {
       await copyToClipboard(input.value);
-      alert('链接已复制');
+      showToast('链接已复制', 'success');
     }
   });
   document.getElementById('share-preview-edit-btn')?.addEventListener('click', async () => {
@@ -1518,18 +1866,18 @@ function bindSharePageEvents() {
     await openShareFileEdit(id);
   });
   document.querySelectorAll('[data-share-edit]').forEach((el) => {
-    el.addEventListener('click', () => openShareFileEdit(el.dataset.shareEdit).catch((err) => alert(err.message)));
+    el.addEventListener('click', () => openShareFileEdit(el.dataset.shareEdit).catch(() => {}));
   });
   document.getElementById('share-back-folder')?.addEventListener('click', () => {
     state.sharePreviewFile = null;
     render();
   });
   document.querySelectorAll('[data-share-crumb]').forEach((el) => {
-    el.addEventListener('click', () => navigateShareFolder(Number(el.dataset.shareCrumb)).catch((err) => alert(err.message)));
+    el.addEventListener('click', () => navigateShareFolder(Number(el.dataset.shareCrumb)).catch(() => {}));
   });
   document.querySelectorAll('[data-share-open]').forEach((el) => {
     el.addEventListener('click', () =>
-      openShareFolder(el.dataset.shareOpen, el.dataset.shareName).catch((err) => alert(err.message))
+      openShareFolder(el.dataset.shareOpen, el.dataset.shareName).catch(() => {})
     );
   });
   document.querySelectorAll('[data-share-preview]').forEach((el) => {
@@ -1541,7 +1889,7 @@ function bindSharePageEvents() {
         editable: el.dataset.shareEditable === 'true',
         size: 0,
         previewable: true,
-      }).catch((err) => alert(err.message))
+      }).catch(() => {})
     );
   });
 }
@@ -1597,7 +1945,7 @@ function bindCollabAutocomplete() {
 }
 
 function bindMainEvents() {
-  document.getElementById('settings-btn')?.addEventListener('click', () => openSettings('account').catch((err) => alert(err.message)));
+  document.getElementById('settings-btn')?.addEventListener('click', () => openSettings('account').catch(() => {}));
   document.getElementById('logout-btn')?.addEventListener('click', handleLogout);
   document.getElementById('newfolder-btn')?.addEventListener('click', createFolder);
   document.getElementById('newfile-btn')?.addEventListener('click', openNewFileModal);
@@ -1616,15 +1964,25 @@ function bindMainEvents() {
       else if (action === 'rename') {
         const n = prompt('重命名', name);
         if (n?.trim()) {
-          await api(`/files/${id}`, { method: 'PATCH', body: JSON.stringify({ name: n.trim() }) });
-          await loadFiles();
-          render();
+          try {
+            await api(`/files/${id}`, { method: 'PATCH', body: JSON.stringify({ name: n.trim() }) });
+            await loadFiles();
+            showToast(`已重命名为「${n.trim()}」`, 'success');
+            render();
+          } catch {
+            /* api 已提示错误 */
+          }
         }
       } else if (action === 'delete') {
         if (confirm(`删除「${name}」？`)) {
-          await api(`/files/${id}`, { method: 'DELETE' });
-          await loadFiles();
-          render();
+          try {
+            await api(`/files/${id}`, { method: 'DELETE' });
+            await loadFiles();
+            showToast(`「${name}」已删除`, 'success');
+            render();
+          } catch {
+            /* api 已提示错误 */
+          }
         }
       }
     });
@@ -1638,17 +1996,17 @@ function bindMainEvents() {
   document.getElementById('modal-close')?.addEventListener('click', closeModal);
   document.getElementById('newfolder-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
-    submitNewFolder(e.target).catch((err) => alert(err.message));
+    submitNewFolder(e.target).catch(() => {});
   });
   document.getElementById('newfile-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
-    submitNewFile(e.target).catch((err) => alert(err.message));
+    submitNewFile(e.target).catch(() => {});
   });
   document.getElementById('copy-preview-link')?.addEventListener('click', async () => {
     const input = document.getElementById('preview-link');
     if (input?.value) {
       await copyToClipboard(input.value);
-      alert('链接已复制');
+      showToast('链接已复制', 'success');
     }
   });
   document.getElementById('preview-edit-btn')?.addEventListener('click', () => {
@@ -1657,17 +2015,17 @@ function bindMainEvents() {
   });
   document.getElementById('share-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
-    submitShare(e.target).catch((err) => alert(err.message));
+    submitShare(e.target).catch(() => {});
   });
   document.getElementById('collab-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
-    submitCollab(e.target).catch((err) => alert(err.message));
+    submitCollab(e.target).catch(() => {});
   });
   document.querySelectorAll('[data-rm-collab]').forEach((el) => {
-    el.addEventListener('click', () => removeCollab(el.dataset.rmCollab).catch((err) => alert(err.message)));
+    el.addEventListener('click', () => removeCollab(el.dataset.rmCollab).catch(() => {}));
   });
   bindCollabAutocomplete();
-  document.getElementById('save-edit')?.addEventListener('click', () => saveEditContent().catch((err) => alert(err.message)));
+  document.getElementById('save-edit')?.addEventListener('click', () => saveEditContent().catch(() => {}));
 
   const dropZone = document.getElementById('drop-zone');
   if (dropZone && state.scope === 'mine') {

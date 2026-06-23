@@ -12,7 +12,7 @@ binding = "DB"
 database_name = "cloud-disk"
 migrations_dir = "migrations"
 
-# KV 仅声明 binding，不填写 id；一键部署 Configure resources 不会出现 KV，由 wrangler deploy 自动创建
+# 一键部署时在配置页将 KV 命名空间名称设为 cloud-disk（与 D1 同名，类型不同不冲突）
 [[kv_namespaces]]
 binding = "KV"
 

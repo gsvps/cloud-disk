@@ -16,10 +16,13 @@
     "typecheck": "tsc --noEmit"
   },
   "cloudflare": {
-    "products": ["Workers", "D1", "R2"],
+    "products": ["Workers", "D1", "R2", "KV"],
     "bindings": {
       "DB": {
         "description": "D1 数据库，存储用户与文件元数据。默认名称：`cloud-disk`"
+      },
+      "KV": {
+        "description": "KV 命名空间，存储登录会话。默认名称：`cloud-disk`（与 D1 同名，与 R2 不可同名）"
       },
       "R2": {
         "description": "R2 存储桶，存储上传文件。默认名称：`cloud-disk-files`"

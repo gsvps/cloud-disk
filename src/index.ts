@@ -25,6 +25,17 @@ app.route('/api/shares', shares);
 app.route('/api/share', publicShareRouter);
 app.route('/api/public-preview', previewPublicRouter);
 
+app.onError((err, c) => {
+  console.error(err);
+  return c.json(
+    {
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: '服务器内部错误，请稍后重试' },
+    },
+    500
+  );
+});
+
 app.get('*', async (c) => {
   const url = new URL(c.req.url);
   let path = url.pathname;
