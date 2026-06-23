@@ -3,7 +3,7 @@ interface Env {
   KV: KVNamespace;
   R2: R2Bucket;
   ASSETS: Fetcher;
-  APP_NAME: string;
+  APP_NAME?: string;
 }
 
 export type { Env };

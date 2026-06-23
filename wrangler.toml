@@ -1,4 +1,4 @@
-name = "cloud-disk"
+# Worker 名称不在仓库中预填，一键部署时由用户在部署页自行填写
 main = "src/index.ts"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
@@ -19,5 +19,4 @@ binding = "KV"
 binding = "R2"
 bucket_name = "cloud-disk-files"
 
-[vars]
-APP_NAME = "CloudDisk"
+# APP_NAME 不在仓库中预填；部署页留空时应用内默认显示 CloudDisk

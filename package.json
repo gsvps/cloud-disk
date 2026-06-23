@@ -16,7 +16,6 @@
     "typecheck": "tsc --noEmit"
   },
   "cloudflare": {
-    "label": "CloudDisk",
     "products": ["Workers", "D1", "R2"],
     "bindings": {
       "DB": {
@@ -29,7 +28,7 @@
         "description": "R2 存储桶，存储上传文件。默认名称：`cloud-disk-files`"
       },
       "APP_NAME": {
-        "description": "应用显示名称，默认 `CloudDisk` 即可，一般无需修改"
+        "description": "应用显示名称（可选）。**留空**则界面默认显示 `CloudDisk`；若连接已有 Git 仓库，可与 Worker 名称保持一致"
       }
     }
   },

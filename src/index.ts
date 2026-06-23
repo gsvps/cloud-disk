@@ -10,7 +10,7 @@ import user from './routes/user';
 const app = new Hono<{ Bindings: Env }>();
 
 app.get('/api/health', (c) =>
-  c.json({ success: true, data: { status: 'ok', app: c.env.APP_NAME } })
+  c.json({ success: true, data: { status: 'ok', app: c.env.APP_NAME || 'CloudDisk' } })
 );
 
 app.route('/api/auth', auth);

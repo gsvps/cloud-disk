@@ -28,14 +28,10 @@
 > **若部署页仍显示旧名称（如 `cloud-disk-db`）**  
 > 部署页会缓存配置。请**关闭旧标签页**，用无痕窗口重新打开上方按钮，或访问：  
 > https://deploy.workers.cloudflare.com/?url=https://github.com/gsvps/cloud-disk/tree/main  
-> 在「Configure resources」步骤确认：D1 = `cloud-disk`，KV = `cloud-disk`（通常与 Worker 名相同），R2 = `cloud-disk-files`，`APP_NAME` = `CloudDisk`。
+> 在「Configure resources」步骤确认：D1 = `cloud-disk`，KV = `cloud-disk`（通常与 Worker 名相同），R2 = `cloud-disk-files`。**项目名称 / Worker 名称 / `APP_NAME` 默认留空，请按需自行填写**（留空 `APP_NAME` 时界面显示 `CloudDisk`）。
 
 > **若提示「已存在具有该名称的存储库」**  
-> 一键部署会在你的 GitHub 账号下**新建一个 fork 仓库**，默认名称与源仓库相同（`cloud-disk`）。若你已有同名仓库（例如已是 `gsvps/cloud-disk` 的维护者），请在部署页把 **Git 仓库名称** 改成其他名字，例如：
-> - `cloud-disk-app`
-> - `my-cloud-disk`
->
-> Worker 名称、D1/KV/R2 仍可保持 `cloud-disk` 系列默认值，**不必与 Git 仓库名相同**。
+> 一键部署会在你的 GitHub 账号下**新建一个 fork 仓库**。本项目**不再预填项目名称**，请在部署页自行填写 Git 仓库名称（例如 `my-cloud-disk`）。若你已有源码仓库，建议**跳过一键按钮**，改用 Dashboard 连接已有仓库（见下文）。
 
 > **若你已有该源码仓库，想直接部署（不 fork）**  
 > 可跳过一键按钮，在 [Cloudflare Dashboard](https://dash.cloudflare.com/) → **Workers & Pages** → **Create** → 连接 GitHub 仓库 `gsvps/cloud-disk`，按 `wrangler.toml` 配置资源后部署即可。
@@ -44,8 +40,8 @@
 
 | 资源 | 默认名称 | 说明 |
 |------|----------|------|
-| 项目名称 | `CloudDisk` | 应用显示名称（`APP_NAME`） |
-| Worker | `cloud-disk` | Workers 脚本名 / 访问域名 |
+| 项目名称 / Worker 名称 | **留空（需自填）** | 不在仓库中预填；部署页由用户指定 |
+| 应用显示名 `APP_NAME` | **留空（可选）** | 留空时界面默认显示 `CloudDisk` |
 | D1 | `cloud-disk` | 用户与文件元数据 |
 | KV | `cloud-disk` | 登录会话（与 D1 同名，资源类型不同） |
 | R2 | `cloud-disk-files` | 上传的文件内容（须与 KV 区分） |
@@ -58,8 +54,8 @@
 
 | 参数 | 默认值 | 来源 |
 |------|--------|------|
-| 项目名称 | `CloudDisk` | `wrangler.toml` → `[vars]` `APP_NAME` |
-| Worker 名称 | `cloud-disk` | `wrangler.toml` → `name` |
+| 项目名称 / Worker 名称 | **留空** | 由用户在部署页填写 |
+| 应用显示名 `APP_NAME` | **留空** | 可选；未设置时应用内为 `CloudDisk` |
 | 构建命令 | `npm run build` | `package.json` → `scripts.build` |
 | 部署命令 | `npm run deploy` | `package.json` → `scripts.deploy` |
 | 预览部署命令 | `npx wrangler versions upload` | Cloudflare 平台默认 |
@@ -68,7 +64,6 @@
 | D1 数据库 | `cloud-disk` | `wrangler.toml` |
 | KV 命名空间 | `cloud-disk` | 部署页默认与 Worker 名相同 |
 | R2 存储桶 | `cloud-disk-files` | `wrangler.toml` |
-| 环境变量 `APP_NAME` | `CloudDisk` | `wrangler.toml` → `[vars]` |
 
 > 说明：D1 与 KV 均使用 `cloud-disk`（不同类型资源可同名）；R2 使用 `cloud-disk-files`，避免与 KV 冲突。
 
@@ -79,7 +74,7 @@
 | **非生产分支部署命令** | 一般不用 | 默认 `npx wrangler versions upload`，仅在你用非 `main` 分支做预览部署时才需要 |
 | **路径（根目录）** | 留空即可 | 本项目不是 monorepo，根目录就是仓库根 |
 | **API 令牌** | 一键部署不用填 | 点按钮时 Cloudflare 会引导授权；仅本地 `wrangler` CLI 需要登录 |
-| **变量名称 / 变量值** | 保持默认 | 已有 `APP_NAME = CloudDisk`，无需修改；没有密钥类变量需要填写 |
+| **变量名称 / 变量值** | `APP_NAME` 可留空 | 无密钥类变量；`APP_NAME` 留空即可 |
 
 ### 手动部署步骤
 
@@ -110,8 +105,12 @@ npx wrangler r2 bucket create cloud-disk-files
 #### 4. 构建并部署
 
 ```bash
-npm run deploy:cloudflare
+npm run build
+npm run db:migrate
+npx wrangler deploy --name cloud-disk
 ```
+
+> 仓库未预填 Worker 名称时，本地部署需通过 `--name` 指定（名称需与 Cloudflare Dashboard 中 Worker 一致）。
 
 该命令会依次：构建 CSS → 执行 D1 远程迁移 → 部署 Worker。
 
