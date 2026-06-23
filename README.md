@@ -58,7 +58,7 @@
 |------|-------------|------|
 | **非生产分支部署命令** | 一般不用 | 默认 `npx wrangler versions upload`，仅在你用非 `main` 分支做预览部署时才需要 |
 | **路径（根目录）** | 留空即可 | 本项目不是 monorepo，根目录就是仓库根 |
-| **API 令牌** | 一键部署不用填 | 点按钮时 Cloudflare 会引导授权；API 令牌仅用于 GitHub Actions 或本地 `wrangler` CLI |
+| **API 令牌** | 一键部署不用填 | 点按钮时 Cloudflare 会引导授权；仅本地 `wrangler` CLI 需要登录 |
 | **变量名称 / 变量值** | 保持默认 | 已有 `APP_NAME = CloudDisk`，无需修改；没有密钥类变量需要填写 |
 
 ### 手动部署步骤
@@ -142,14 +142,3 @@ cloud-disk/
 ## License
 
 MIT
-
-## 关于 GitHub Actions 报错
-
-仓库含 `.github/workflows/deploy.yml`，会在 **push 到 main** 时尝试通过 GitHub Actions 自动部署。这与「一键部署按钮」是**两条独立路径**：
-
-| 方式 | 触发 | 认证 |
-|------|------|------|
-| 一键部署按钮 | 在 Cloudflare 页面点 Deploy | Cloudflare 引导登录授权 |
-| GitHub Actions | push 到 main 分支 | 需在 GitHub 仓库 Settings → Secrets 配置 `CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID` |
-
-若你只用一键部署、未配置 GitHub Secrets，Actions 会失败，**不影响**一键部署的使用。不需要 GitHub 自动部署时，可忽略 Actions 报错，或删除 `.github/workflows/deploy.yml`。
