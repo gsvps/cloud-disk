@@ -3,59 +3,55 @@ const API = '/api';
 const state = {
   user: null,
   needsSetup: false,
+  authMode: 'login',
   files: [],
+  scope: 'mine',
   currentParentId: null,
   breadcrumbs: [{ id: null, name: '全部文件' }],
   loading: true,
   uploading: false,
   error: '',
+  modal: null,
+  sharePage: null,
+  shareAccessToken: null,
 };
 
 async function api(path, options = {}) {
-  const res = await fetch(`${API}${path}`, {
-    credentials: 'include',
-    ...options,
-    headers: {
-      ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-      ...options.headers,
-    },
-  });
+  const headers = { ...(options.headers || {}) };
+  if (!(options.body instanceof FormData)) {
+    headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+  }
+  if (state.shareAccessToken) {
+    headers['X-Share-Access'] = state.shareAccessToken;
+  }
+
+  const res = await fetch(`${API}${path}`, { credentials: 'include', ...options, headers });
 
   if (res.headers.get('content-type')?.includes('application/json')) {
     const data = await res.json();
-    if (!data.success) {
-      throw new Error(data.error?.message || '请求失败');
-    }
+    if (!data.success) throw new Error(data.error?.message || '请求失败');
     return data.data;
   }
-
   if (!res.ok) throw new Error('请求失败');
   return res;
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/"/g, '&quot;');
 }
 
 function formatBytes(bytes) {
   if (bytes === 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  const value = bytes / Math.pow(1024, i);
-  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+  return `${(bytes / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 function formatDate(iso) {
-  return new Date(iso).toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function icon(isFolder) {
-  if (isFolder) {
-    return `<svg class="h-5 w-5 text-amber-500" fill="currentColor" viewBox="0 0 20 20"><path d="M2 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>`;
-  }
-  return `<svg class="h-5 w-5 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>`;
+  return new Date(iso).toLocaleString('zh-CN');
 }
 
 function setError(msg) {
@@ -67,11 +63,32 @@ function clearError() {
   state.error = '';
 }
 
-async function init() {
+function closeModal() {
+  state.modal = null;
+  render();
+}
+
+async function loadFiles() {
+  const params = new URLSearchParams();
+  if (state.currentParentId) params.set('parentId', state.currentParentId);
+  if (state.scope === 'shared') params.set('scope', 'shared');
+  const q = params.toString() ? `?${params}` : '';
+  const data = await api(`/files${q}`);
+  state.files = data.files;
+}
+
+async function initApp() {
+  const shareMatch = location.pathname.match(/^\/s\/([^/]+)/);
+  if (shareMatch) {
+    state.sharePage = shareMatch[1];
+    state.loading = false;
+    render();
+    return;
+  }
+
   try {
     const setup = await api('/auth/setup-status');
     state.needsSetup = setup.needsSetup;
-
     if (!state.needsSetup) {
       try {
         const me = await api('/user/me');
@@ -80,22 +97,13 @@ async function init() {
         state.user = null;
       }
     }
-
-    if (state.user) {
-      await loadFiles();
-    }
+    if (state.user) await loadFiles();
   } catch (err) {
     setError(err.message);
   } finally {
     state.loading = false;
     render();
   }
-}
-
-async function loadFiles() {
-  const query = state.currentParentId ? `?parentId=${state.currentParentId}` : '';
-  const data = await api(`/files${query}`);
-  state.files = data.files;
 }
 
 async function handleSetup(e) {
@@ -105,10 +113,7 @@ async function handleSetup(e) {
   try {
     const data = await api('/auth/setup', {
       method: 'POST',
-      body: JSON.stringify({
-        username: form.username.value,
-        password: form.password.value,
-      }),
+      body: JSON.stringify({ username: form.username.value, password: form.password.value }),
     });
     state.user = data.user;
     state.needsSetup = false;
@@ -126,10 +131,24 @@ async function handleLogin(e) {
   try {
     const data = await api('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({
-        username: form.username.value,
-        password: form.password.value,
-      }),
+      body: JSON.stringify({ username: form.username.value, password: form.password.value }),
+    });
+    state.user = data.user;
+    await loadFiles();
+    render();
+  } catch (err) {
+    setError(err.message);
+  }
+}
+
+async function handleRegister(e) {
+  e.preventDefault();
+  clearError();
+  const form = e.target;
+  try {
+    const data = await api('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ username: form.username.value, password: form.password.value }),
     });
     state.user = data.user;
     await loadFiles();
@@ -142,13 +161,20 @@ async function handleLogin(e) {
 async function handleLogout() {
   try {
     await api('/auth/logout', { method: 'POST' });
-  } catch {
-    /* ignore */
-  }
+  } catch {}
   state.user = null;
   state.files = [];
+  state.scope = 'mine';
   state.currentParentId = null;
   state.breadcrumbs = [{ id: null, name: '全部文件' }];
+  render();
+}
+
+async function switchScope(scope) {
+  state.scope = scope;
+  state.currentParentId = null;
+  state.breadcrumbs = [{ id: null, name: scope === 'shared' ? '与我共享' : '全部文件' }];
+  await loadFiles();
   render();
 }
 
@@ -160,9 +186,8 @@ async function openFolder(id, name) {
 }
 
 async function navigateTo(index) {
-  const crumb = state.breadcrumbs[index];
   state.breadcrumbs = state.breadcrumbs.slice(0, index + 1);
-  state.currentParentId = crumb.id;
+  state.currentParentId = state.breadcrumbs[index].id;
   await loadFiles();
   render();
 }
@@ -170,7 +195,6 @@ async function navigateTo(index) {
 async function createFolder() {
   const name = prompt('请输入文件夹名称');
   if (!name?.trim()) return;
-  clearError();
   try {
     await api('/files/folders', {
       method: 'POST',
@@ -186,17 +210,13 @@ async function createFolder() {
 async function uploadFiles(fileList) {
   if (!fileList.length) return;
   state.uploading = true;
-  clearError();
   render();
-
   try {
     for (const file of fileList) {
-      const formData = new FormData();
-      formData.append('file', file);
-      if (state.currentParentId) {
-        formData.append('parentId', state.currentParentId);
-      }
-      await api('/files/upload', { method: 'POST', body: formData });
+      const fd = new FormData();
+      fd.append('file', file);
+      if (state.currentParentId) fd.append('parentId', state.currentParentId);
+      await api('/files/upload', { method: 'POST', body: fd });
     }
     await loadFiles();
   } catch (err) {
@@ -207,235 +227,429 @@ async function uploadFiles(fileList) {
   }
 }
 
-async function renameFile(id, currentName) {
-  const name = prompt('重命名', currentName);
-  if (!name?.trim() || name.trim() === currentName) return;
-  clearError();
-  try {
-    await api(`/files/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ name: name.trim() }),
-    });
-    await loadFiles();
-    render();
-  } catch (err) {
-    setError(err.message);
-  }
-}
-
-async function deleteFile(id, name, isFolder) {
-  const label = isFolder ? '文件夹' : '文件';
-  if (!confirm(`确定删除${label}「${name}」吗？`)) return;
-  clearError();
-  try {
-    await api(`/files/${id}`, { method: 'DELETE' });
-    await loadFiles();
-    render();
-  } catch (err) {
-    setError(err.message);
-  }
-}
-
 function downloadFile(id) {
   window.open(`${API}/files/${id}/download`, '_blank');
 }
 
-function renderAuth() {
-  const isSetup = state.needsSetup;
-  return `
-    <div class="flex min-h-screen items-center justify-center p-4">
-      <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-        <div class="mb-8 text-center">
-          <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-600 text-white">
-            <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/>
-            </svg>
-          </div>
-          <h1 class="text-2xl font-bold text-slate-900">CloudDisk</h1>
-          <p class="mt-2 text-sm text-slate-500">${isSetup ? '首次使用，请创建管理员账号' : '登录你的网盘'}</p>
-        </div>
-        ${state.error ? `<div class="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">${state.error}</div>` : ''}
-        <form onsubmit="return false" id="auth-form" class="space-y-4">
-          <div>
-            <label class="mb-1 block text-sm font-medium text-slate-700">用户名</label>
-            <input class="input" name="username" required minlength="2" placeholder="请输入用户名" />
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium text-slate-700">密码</label>
-            <input class="input" type="password" name="password" required minlength="6" placeholder="至少 6 位" />
-          </div>
-          <button type="submit" class="btn-primary w-full">${isSetup ? '创建并进入' : '登录'}</button>
-        </form>
-      </div>
-    </div>
-  `;
+function openShareModal(id, name) {
+  state.modal = { type: 'share', fileId: id, fileName: name };
+  render();
 }
 
-function renderFileList() {
-  if (state.files.length === 0) {
-    return `
-      <div class="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 py-16 text-slate-400">
-        <svg class="mb-3 h-12 w-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-        </svg>
-        <p class="text-sm">暂无文件，拖拽或点击上传</p>
-      </div>
-    `;
+function openCollabModal(id, name) {
+  state.modal = { type: 'collab', fileId: id, fileName: name, collaborators: [] };
+  api(`/files/${id}/collaborators`)
+    .then((d) => {
+      if (state.modal?.fileId === id) {
+        state.modal.collaborators = d.collaborators;
+        render();
+      }
+    })
+    .catch(() => {});
+  render();
+}
+
+function openPreviewModal(id, name, mime) {
+  state.modal = { type: 'preview', fileId: id, fileName: name, mime };
+  render();
+}
+
+function openEditModal(id, name) {
+  state.modal = { type: 'edit', fileId: id, fileName: name, content: '', loading: true };
+  render();
+  api(`/files/${id}/content`)
+    .then((d) => {
+      if (state.modal?.fileId === id) {
+        state.modal.content = d.content;
+        state.modal.loading = false;
+        render();
+      }
+    })
+    .catch((err) => {
+      setError(err.message);
+      closeModal();
+    });
+}
+
+async function submitShare(form) {
+  const data = await api('/shares', {
+    method: 'POST',
+    body: JSON.stringify({
+      fileId: state.modal.fileId,
+      password: form.password.value || undefined,
+      expiresInHours: Number(form.expires.value) || undefined,
+      allowPreview: form.allowPreview.checked,
+      allowEdit: form.allowEdit.checked,
+      allowDownload: form.allowDownload.checked,
+      directLink: form.directLink.checked,
+      maxDownloads: form.maxDownloads.value ? Number(form.maxDownloads.value) : undefined,
+    }),
+  });
+  state.modal.result = data.share;
+  render();
+}
+
+async function submitCollab(form) {
+  await api(`/files/${state.modal.fileId}/collaborators`, {
+    method: 'POST',
+    body: JSON.stringify({
+      username: form.username.value.trim(),
+      permission: form.permission.value,
+    }),
+  });
+  const d = await api(`/files/${state.modal.fileId}/collaborators`);
+  state.modal.collaborators = d.collaborators;
+  form.username.value = '';
+  render();
+}
+
+async function removeCollab(collaboratorId) {
+  await api(`/files/${state.modal.fileId}/collaborators/${collaboratorId}`, { method: 'DELETE' });
+  const d = await api(`/files/${state.modal.fileId}/collaborators`);
+  state.modal.collaborators = d.collaborators;
+  render();
+}
+
+async function saveEditContent() {
+  const ta = document.getElementById('edit-content');
+  await api(`/files/${state.modal.fileId}/content`, {
+    method: 'PUT',
+    body: JSON.stringify({ content: ta.value }),
+  });
+  closeModal();
+  await loadFiles();
+  render();
+}
+
+async function initSharePage() {
+  const token = state.sharePage;
+  try {
+    const info = await api(`/share/${token}`);
+    state.shareInfo = info;
+    if (info.requiresPassword && !state.shareAccessToken) {
+      state.shareNeedsPassword = true;
+    } else if (!info.requiresPassword) {
+      const access = await api(`/share/${token}/access`, { method: 'POST', body: '{}' });
+      state.shareAccessToken = access.accessToken;
+    }
+  } catch (err) {
+    state.shareError = err.message;
+  }
+  render();
+}
+
+async function verifySharePassword(form) {
+  const access = await api(`/share/${state.sharePage}/access`, {
+    method: 'POST',
+    body: JSON.stringify({ password: form.password.value }),
+  });
+  state.shareAccessToken = access.accessToken;
+  state.shareNeedsPassword = false;
+  render();
+}
+
+function renderModal() {
+  if (!state.modal) return '';
+  const m = state.modal;
+
+  if (m.type === 'share') {
+    if (m.result) {
+      return `<div class="modal-backdrop"><div class="modal">
+        <h3 class="mb-3 text-lg font-semibold">分享已创建</h3>
+        <p class="mb-2 text-sm text-slate-600">文件：${esc(m.fileName)}</p>
+        <label class="text-xs text-slate-500">分享链接</label>
+        <input class="input mb-2" readonly value="${esc(m.result.url)}" onclick="this.select()" />
+        ${m.result.directUrl ? `<label class="text-xs text-slate-500">直链下载</label><input class="input mb-4" readonly value="${esc(m.result.directUrl)}" onclick="this.select()" />` : ''}
+        <button class="btn-primary w-full" id="modal-close">关闭</button>
+      </div></div>`;
+    }
+    return `<div class="modal-backdrop"><div class="modal">
+      <h3 class="mb-3 text-lg font-semibold">创建分享 · ${esc(m.fileName)}</h3>
+      <form id="share-form" class="space-y-3">
+        <div><label class="label">分享密码（可选）</label><input class="input" name="password" type="password" placeholder="留空则无需密码" /></div>
+        <div><label class="label">有效期</label><select class="input" name="expires">
+          <option value="24">1 天</option><option value="168">7 天</option><option value="720">30 天</option><option value="0">永久</option>
+        </select></div>
+        <div><label class="label">下载次数上限（可选）</label><input class="input" name="maxDownloads" type="number" min="1" placeholder="不限" /></div>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="allowPreview" checked /> 允许预览</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="allowEdit" /> 允许在线编辑</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="allowDownload" checked /> 允许下载</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="directLink" /> 直链（无密码时可外链下载）</label>
+        <div class="flex gap-2"><button type="button" class="btn-secondary flex-1" id="modal-close">取消</button><button type="submit" class="btn-primary flex-1">创建</button></div>
+      </form>
+    </div></div>`;
   }
 
-  const rows = state.files
-    .map(
-      (f) => `
-      <tr class="border-b border-slate-100 hover:bg-slate-50">
-        <td class="px-4 py-3">
-          <button
-            class="flex items-center gap-3 text-left ${f.isFolder ? 'font-medium text-slate-900 hover:text-brand-600' : 'text-slate-700'}"
-            data-action="${f.isFolder ? 'open' : 'download'}"
-            data-id="${f.id}"
-            data-name="${f.name.replace(/"/g, '&quot;')}"
-          >
-            ${icon(f.isFolder)}
-            <span>${f.name}</span>
-          </button>
-        </td>
-        <td class="hidden px-4 py-3 text-sm text-slate-500 sm:table-cell">${f.isFolder ? '—' : formatBytes(f.size)}</td>
-        <td class="hidden px-4 py-3 text-sm text-slate-500 md:table-cell">${formatDate(f.createdAt)}</td>
-        <td class="px-4 py-3 text-right">
-          <div class="flex justify-end gap-1">
-            <button class="btn-secondary px-2 py-1 text-xs" data-action="rename" data-id="${f.id}" data-name="${f.name.replace(/"/g, '&quot;')}">重命名</button>
-            <button class="btn-danger px-2 py-1 text-xs" data-action="delete" data-id="${f.id}" data-name="${f.name.replace(/"/g, '&quot;')}" data-folder="${f.isFolder}">删除</button>
-          </div>
-        </td>
-      </tr>
-    `
-    )
-    .join('');
+  if (m.type === 'collab') {
+    const list = (m.collaborators || [])
+      .map(
+        (c) =>
+          `<li class="flex items-center justify-between py-1 text-sm"><span>${esc(c.username)} · ${c.permission === 'edit' ? '可编辑' : '只读'}</span><button class="text-red-500" data-rm-collab="${c.id}">移除</button></li>`
+      )
+      .join('');
+    return `<div class="modal-backdrop"><div class="modal">
+      <h3 class="mb-3 text-lg font-semibold">协作 · ${esc(m.fileName)}</h3>
+      <form id="collab-form" class="mb-4 space-y-2">
+        <input class="input" name="username" placeholder="用户名" required />
+        <select class="input" name="permission"><option value="view">只读</option><option value="edit">可编辑</option></select>
+        <button type="submit" class="btn-primary w-full">添加协作者</button>
+      </form>
+      <ul class="border-t pt-2">${list || '<li class="text-sm text-slate-400">暂无协作者</li>'}</ul>
+      <button class="btn-secondary mt-4 w-full" id="modal-close">关闭</button>
+    </div></div>`;
+  }
 
-  return `
-    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <table class="w-full">
-        <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-          <tr>
-            <th class="px-4 py-3 font-medium">名称</th>
-            <th class="hidden px-4 py-3 font-medium sm:table-cell">大小</th>
-            <th class="hidden px-4 py-3 font-medium md:table-cell">创建时间</th>
-            <th class="px-4 py-3 font-medium text-right">操作</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
+  if (m.type === 'preview') {
+    const url = `${API}/files/${m.fileId}/preview`;
+    let body = '';
+    if ((m.mime || '').startsWith('image/')) body = `<img src="${url}" class="max-h-[70vh] w-full object-contain" />`;
+    else if ((m.mime || '').startsWith('video/')) body = `<video src="${url}" controls class="w-full"></video>`;
+    else if ((m.mime || '').startsWith('audio/')) body = `<audio src="${url}" controls class="w-full"></audio>`;
+    else if (m.mime === 'application/pdf') body = `<iframe src="${url}" class="h-[70vh] w-full"></iframe>`;
+    else body = `<iframe src="${url}" class="h-[70vh] w-full"></iframe>`;
+    return `<div class="modal-backdrop"><div class="modal modal-lg"><div class="mb-2 flex items-center justify-between"><h3 class="font-semibold">${esc(m.fileName)}</h3><button id="modal-close" class="btn-secondary">关闭</button></div>${body}</div></div>`;
+  }
+
+  if (m.type === 'edit') {
+    if (m.loading) return `<div class="modal-backdrop"><div class="modal modal-lg"><p>加载中...</p></div></div>`;
+    return `<div class="modal-backdrop"><div class="modal modal-lg">
+      <div class="mb-2 flex items-center justify-between"><h3 class="font-semibold">编辑 · ${esc(m.fileName)}</h3><button id="modal-close" class="btn-secondary">关闭</button></div>
+      <textarea id="edit-content" class="input h-96 font-mono text-sm">${esc(m.content)}</textarea>
+      <button id="save-edit" class="btn-primary mt-3 w-full">保存</button>
+    </div></div>`;
+  }
+  return '';
+}
+
+function renderAuth() {
+  if (state.needsSetup) {
+    return `<div class="flex min-h-screen items-center justify-center p-4"><div class="w-full max-w-md rounded-2xl border bg-white p-8 shadow-sm">
+      <h1 class="mb-6 text-center text-2xl font-bold">CloudDisk 初始化</h1>
+      ${state.error ? `<div class="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-600">${esc(state.error)}</div>` : ''}
+      <form id="auth-form" class="space-y-4"><input class="input" name="username" required placeholder="管理员用户名" minlength="2" />
+      <input class="input" type="password" name="password" required placeholder="密码" minlength="6" />
+      <button class="btn-primary w-full">创建并进入</button></form></div></div>`;
+  }
+
+  return `<div class="flex min-h-screen items-center justify-center p-4"><div class="w-full max-w-md rounded-2xl border bg-white p-8 shadow-sm">
+    <h1 class="mb-2 text-center text-2xl font-bold">CloudDisk</h1>
+    <p class="mb-6 text-center text-sm text-slate-500">多人协作网盘</p>
+    <div class="mb-4 flex rounded-lg bg-slate-100 p-1">
+      <button class="flex-1 rounded-md py-2 text-sm ${state.authMode === 'login' ? 'bg-white shadow' : ''}" data-auth-mode="login">登录</button>
+      <button class="flex-1 rounded-md py-2 text-sm ${state.authMode === 'register' ? 'bg-white shadow' : ''}" data-auth-mode="register">注册</button>
     </div>
-  `;
+    ${state.error ? `<div class="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-600">${esc(state.error)}</div>` : ''}
+    <form id="auth-form" class="space-y-4">
+      <input class="input" name="username" required placeholder="用户名" minlength="2" />
+      <input class="input" type="password" name="password" required placeholder="密码" minlength="6" />
+      <button class="btn-primary w-full">${state.authMode === 'login' ? '登录' : '注册'}</button>
+    </form></div></div>`;
+}
+
+function renderFileActions(f) {
+  const btns = [];
+  if (f.isFolder) {
+    if (f.owned) btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="collab" data-id="${f.id}" data-name="${esc(f.name)}">协作</button>`);
+    return btns.join('');
+  }
+  if (f.previewable) btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="preview" data-id="${f.id}" data-name="${esc(f.name)}" data-mime="${esc(f.mimeType || '')}">预览</button>`);
+  if (f.editable && (f.permission === 'owner' || f.permission === 'edit')) btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="edit" data-id="${f.id}" data-name="${esc(f.name)}">编辑</button>`);
+  btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="download" data-id="${f.id}">下载</button>`);
+  if (f.owned) {
+    btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="share" data-id="${f.id}" data-name="${esc(f.name)}">分享</button>`);
+    btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="collab" data-id="${f.id}" data-name="${esc(f.name)}">协作</button>`);
+  }
+  if (f.permission === 'owner' || f.permission === 'edit') {
+    btns.push(`<button class="btn-secondary px-2 py-1 text-xs" data-action="rename" data-id="${f.id}" data-name="${esc(f.name)}">重命名</button>`);
+  }
+  if (f.permission === 'owner') {
+    btns.push(`<button class="btn-danger px-2 py-1 text-xs" data-action="delete" data-id="${f.id}" data-name="${esc(f.name)}" data-folder="${f.isFolder}">删除</button>`);
+  }
+  return btns.join('');
 }
 
 function renderMain() {
   const crumbs = state.breadcrumbs
-    .map(
-      (c, i) =>
-        `<button class="text-sm ${i === state.breadcrumbs.length - 1 ? 'font-medium text-slate-900' : 'text-brand-600 hover:underline'}" data-crumb="${i}">${c.name}</button>`
-    )
+    .map((c, i) => `<button class="text-sm ${i === state.breadcrumbs.length - 1 ? 'font-medium text-slate-900' : 'text-brand-600 hover:underline'}" data-crumb="${i}">${esc(c.name)}</button>`)
     .join('<span class="mx-2 text-slate-300">/</span>');
 
-  return `
-    <div class="min-h-screen">
-      <header class="border-b border-slate-200 bg-white">
-        <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-          <div class="flex items-center gap-3">
-            <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-600 text-white">
-              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/>
-              </svg>
-            </div>
-            <div>
-              <h1 class="text-lg font-bold text-slate-900">CloudDisk</h1>
-              <p class="text-xs text-slate-500">轻量个人网盘</p>
-            </div>
-          </div>
-          <div class="flex items-center gap-3">
-            <span class="hidden text-sm text-slate-600 sm:inline">${state.user.username}</span>
-            <button id="logout-btn" class="btn-secondary">退出</button>
-          </div>
-        </div>
-      </header>
+  const rows = state.files
+    .map(
+      (f) => `<tr class="border-b hover:bg-slate-50">
+      <td class="px-4 py-3"><button class="flex items-center gap-2 text-left ${f.isFolder ? 'font-medium hover:text-brand-600' : ''}" data-action="${f.isFolder ? 'open' : 'previewable-open'}" data-id="${f.id}" data-name="${esc(f.name)}" data-preview="${f.previewable}" data-mime="${esc(f.mimeType || '')}">${f.isFolder ? '📁' : '📄'} ${esc(f.name)}</button></td>
+      <td class="hidden px-4 py-3 text-sm text-slate-500 sm:table-cell">${f.isFolder ? '—' : formatBytes(f.size)}</td>
+      <td class="hidden px-4 py-3 text-sm text-slate-500 md:table-cell">${formatDate(f.createdAt)}</td>
+      <td class="px-4 py-3"><div class="flex flex-wrap justify-end gap-1">${renderFileActions(f)}</div></td></tr>`
+    )
+    .join('');
 
-      <main class="mx-auto max-w-6xl px-4 py-6">
-        ${state.error ? `<div class="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">${state.error}</div>` : ''}
+  return `<div class="min-h-screen bg-slate-50">
+    <header class="border-b bg-white"><div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
+      <div><h1 class="text-lg font-bold">CloudDisk</h1><p class="text-xs text-slate-500">多人协作 · 分享 · 预览 · 编辑</p></div>
+      <div class="flex items-center gap-3"><span class="text-sm">${esc(state.user.username)}</span><button id="logout-btn" class="btn-secondary">退出</button></div>
+    </div></header>
+    <main class="mx-auto max-w-6xl px-4 py-6">
+      ${state.error ? `<div class="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-600">${esc(state.error)}</div>` : ''}
+      <div class="mb-4 flex flex-wrap gap-2">
+        <button class="${state.scope === 'mine' ? 'btn-primary' : 'btn-secondary'}" data-scope="mine">我的文件</button>
+        <button class="${state.scope === 'shared' ? 'btn-primary' : 'btn-secondary'}" data-scope="shared">与我共享</button>
+      </div>
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <nav>${crumbs}</nav>
+        ${state.scope === 'mine' ? `<div class="flex gap-2"><button id="newfolder-btn" class="btn-secondary">新建文件夹</button>
+          <label class="btn-primary cursor-pointer">${state.uploading ? '上传中...' : '上传'}<input id="file-input" type="file" multiple class="hidden" /></label></div>` : ''}
+      </div>
+      <div id="drop-zone" class="overflow-hidden rounded-xl border bg-white">${rows || '<p class="p-8 text-center text-slate-400">暂无文件</p>'}</div>
+    </main>${renderModal()}</div>`;
+}
 
-        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <nav class="flex flex-wrap items-center">${crumbs}</nav>
-          <div class="flex gap-2">
-            <button id="newfolder-btn" class="btn-secondary">新建文件夹</button>
-            <label class="btn-primary cursor-pointer">
-              ${state.uploading ? '上传中...' : '上传文件'}
-              <input id="file-input" type="file" multiple class="hidden" ${state.uploading ? 'disabled' : ''} />
-            </label>
-          </div>
-        </div>
+function renderSharePageView() {
+  const info = state.shareInfo;
+  if (state.shareError) return `<div class="flex min-h-screen items-center justify-center"><p class="text-red-500">${esc(state.shareError)}</p></div>`;
+  if (!info) return `<div class="flex min-h-screen items-center justify-center"><p>加载中...</p></div>`;
+  if (info.expired) return `<div class="flex min-h-screen items-center justify-center"><p class="text-red-500">分享已过期</p></div>`;
 
-        <div id="drop-zone">${renderFileList()}</div>
-      </main>
-    </div>
-  `;
+  if (state.shareNeedsPassword) {
+    return `<div class="flex min-h-screen items-center justify-center p-4"><div class="w-full max-w-md rounded-xl border bg-white p-6">
+      <h2 class="mb-4 text-lg font-semibold">${esc(info.name)}</h2>
+      <p class="mb-4 text-sm text-slate-500">此分享需要密码</p>
+      <form id="share-pwd-form" class="space-y-3"><input class="input" type="password" name="password" required placeholder="分享密码" />
+      <button class="btn-primary w-full">验证</button></form></div></div>`;
+  }
+
+  const token = state.sharePage;
+  const q = state.shareAccessToken ? `?accessToken=${encodeURIComponent(state.shareAccessToken)}` : '';
+  const previewUrl = `${API}/share/${token}/preview${q}`;
+  const downloadUrl = `${API}/share/${token}/download${q}`;
+
+  let preview = '';
+  if (info.allowPreview) {
+    if ((info.mimeType || '').startsWith('image/')) preview = `<img src="${previewUrl}" class="max-h-96 w-full object-contain" />`;
+    else if (info.mimeType === 'application/pdf') preview = `<iframe src="${previewUrl}" class="h-96 w-full"></iframe>`;
+    else preview = `<iframe src="${previewUrl}" class="h-96 w-full"></iframe>`;
+  }
+
+  return `<div class="mx-auto max-w-3xl p-6">
+    <h1 class="mb-2 text-xl font-bold">${esc(info.name)}</h1>
+    <p class="mb-4 text-sm text-slate-500">${formatBytes(info.size)} · ${info.mimeType || '未知类型'}</p>
+    ${preview}
+    <div class="mt-4 flex flex-wrap gap-2">
+      ${info.allowDownload ? `<a class="btn-primary" href="${downloadUrl}" target="_blank">下载</a>` : ''}
+      ${info.allowEdit ? `<button class="btn-secondary" id="share-edit-btn">在线编辑</button>` : ''}
+    </div></div>`;
 }
 
 function render() {
   const app = document.getElementById('app');
   if (state.loading) {
-    app.innerHTML = `<div class="flex min-h-screen items-center justify-center text-slate-500">加载中...</div>`;
+    app.innerHTML = '<div class="flex min-h-screen items-center justify-center">加载中...</div>';
     return;
   }
-
+  if (state.sharePage) {
+    app.innerHTML = renderSharePageView();
+    bindSharePageEvents();
+    if (!state.shareInfo && !state.shareError) initSharePage();
+    return;
+  }
   if (!state.user) {
     app.innerHTML = renderAuth();
-    const form = document.getElementById('auth-form');
-    form.addEventListener('submit', state.needsSetup ? handleSetup : handleLogin);
+    bindAuthEvents();
     return;
   }
-
   app.innerHTML = renderMain();
   bindMainEvents();
 }
 
-function bindMainEvents() {
-  document.getElementById('logout-btn').addEventListener('click', handleLogout);
-  document.getElementById('newfolder-btn').addEventListener('click', createFolder);
-
-  document.querySelectorAll('[data-crumb]').forEach((el) => {
-    el.addEventListener('click', () => navigateTo(Number(el.dataset.crumb)));
+function bindAuthEvents() {
+  document.getElementById('auth-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (state.needsSetup) handleSetup(e);
+    else if (state.authMode === 'register') handleRegister(e);
+    else handleLogin(e);
   });
+  document.querySelectorAll('[data-auth-mode]').forEach((el) => {
+    el.addEventListener('click', () => {
+      state.authMode = el.dataset.authMode;
+      clearError();
+      render();
+    });
+  });
+}
+
+function bindSharePageEvents() {
+  document.getElementById('share-pwd-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    verifySharePassword(e.target).catch((err) => alert(err.message));
+  });
+  document.getElementById('share-edit-btn')?.addEventListener('click', async () => {
+    const d = await api(`/share/${state.sharePage}/content`);
+    const content = prompt('编辑内容', d.content);
+    if (content === null) return;
+    await api(`/share/${state.sharePage}/content`, { method: 'PUT', body: JSON.stringify({ content }) });
+    alert('已保存');
+  });
+}
+
+function bindMainEvents() {
+  document.getElementById('logout-btn')?.addEventListener('click', handleLogout);
+  document.getElementById('newfolder-btn')?.addEventListener('click', createFolder);
+  document.querySelectorAll('[data-scope]').forEach((el) => el.addEventListener('click', () => switchScope(el.dataset.scope)));
+  document.querySelectorAll('[data-crumb]').forEach((el) => el.addEventListener('click', () => navigateTo(Number(el.dataset.crumb))));
 
   document.querySelectorAll('[data-action]').forEach((el) => {
-    el.addEventListener('click', () => {
-      const { action, id, name, folder } = el.dataset;
+    el.addEventListener('click', async () => {
+      const { action, id, name, folder, mime, preview } = el.dataset;
       if (action === 'open') openFolder(id, name);
-      else if (action === 'download') downloadFile(id);
-      else if (action === 'rename') renameFile(id, name);
-      else if (action === 'delete') deleteFile(id, name, folder === 'true');
+      else if (action === 'previewable-open') {
+        if (preview === 'true') openPreviewModal(id, name, mime);
+        else downloadFile(id);
+      } else if (action === 'download') downloadFile(id);
+      else if (action === 'preview') openPreviewModal(id, name, mime);
+      else if (action === 'edit') openEditModal(id, name);
+      else if (action === 'share') openShareModal(id, name);
+      else if (action === 'collab') openCollabModal(id, name);
+      else if (action === 'rename') {
+        const n = prompt('重命名', name);
+        if (n?.trim()) {
+          await api(`/files/${id}`, { method: 'PATCH', body: JSON.stringify({ name: n.trim() }) });
+          await loadFiles();
+          render();
+        }
+      } else if (action === 'delete') {
+        if (confirm(`删除「${name}」？`)) {
+          await api(`/files/${id}`, { method: 'DELETE' });
+          await loadFiles();
+          render();
+        }
+      }
     });
   });
 
-  const fileInput = document.getElementById('file-input');
-  fileInput.addEventListener('change', (e) => {
+  document.getElementById('file-input')?.addEventListener('change', (e) => {
     uploadFiles([...e.target.files]);
     e.target.value = '';
   });
 
+  document.getElementById('modal-close')?.addEventListener('click', closeModal);
+  document.getElementById('share-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitShare(e.target).catch((err) => alert(err.message));
+  });
+  document.getElementById('collab-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitCollab(e.target).catch((err) => alert(err.message));
+  });
+  document.querySelectorAll('[data-rm-collab]').forEach((el) => {
+    el.addEventListener('click', () => removeCollab(el.dataset.rmCollab).catch((err) => alert(err.message)));
+  });
+  document.getElementById('save-edit')?.addEventListener('click', () => saveEditContent().catch((err) => alert(err.message)));
+
   const dropZone = document.getElementById('drop-zone');
-  ['dragenter', 'dragover'].forEach((evt) => {
-    dropZone.addEventListener(evt, (e) => {
-      e.preventDefault();
-      dropZone.classList.add('ring-2', 'ring-brand-500', 'ring-offset-2');
-    });
-  });
-  ['dragleave', 'drop'].forEach((evt) => {
-    dropZone.addEventListener(evt, (e) => {
-      e.preventDefault();
-      dropZone.classList.remove('ring-2', 'ring-brand-500', 'ring-offset-2');
-    });
-  });
-  dropZone.addEventListener('drop', (e) => {
-    uploadFiles([...e.dataTransfer.files]);
-  });
+  if (dropZone && state.scope === 'mine') {
+    ['dragenter', 'dragover'].forEach((evt) => dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.add('ring-2', 'ring-brand-500'); }));
+    ['dragleave', 'drop'].forEach((evt) => dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.remove('ring-2', 'ring-brand-500'); }));
+    dropZone.addEventListener('drop', (e) => uploadFiles([...e.dataTransfer.files]));
+  }
 }
 
-init();
+initApp();

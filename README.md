@@ -6,11 +6,14 @@
 
 ## 功能
 
-- 首次访问自动引导创建管理员账号
-- 文件上传 / 下载 / 删除 / 重命名
-- 文件夹创建与层级浏览
-- 拖拽上传
+- 多人协作：用户注册、文件夹/文件协作者（只读 / 可编辑）
+- 外链分享：分享密码、有效期、下载次数限制、直链
+- 在线预览：图片、PDF、音视频、文本等
+- 在线编辑：文本类文件（≤ 2MB）
+- 文件上传 / 下载 / 删除 / 重命名、文件夹层级浏览、拖拽上传
 - Session 登录（KV 存储）
+
+> **已部署用户升级**：重新部署后需执行 D1 迁移 `npm run db:migrate`（或 Cloudflare Builds 部署命令中已包含）。
 
 ## 技术栈
 
@@ -132,9 +135,19 @@ npm run deploy:cloudflare
 | GET | `/api/auth/setup-status` | 是否需要初始化 |
 | POST | `/api/auth/setup` | 首次创建管理员 |
 | POST | `/api/auth/login` | 登录 |
+| POST | `/api/auth/register` | 注册新用户 |
 | POST | `/api/auth/logout` | 退出 |
 | GET | `/api/user/me` | 当前用户 |
-| GET | `/api/files` | 文件列表 |
+| GET | `/api/user/search?q=` | 搜索用户（协作） |
+| GET | `/api/files?scope=mine\|shared` | 文件列表 |
+| GET | `/api/files/:id/preview` | 在线预览 |
+| GET | `/api/files/:id/content` | 读取文本内容 |
+| PUT | `/api/files/:id/content` | 保存文本内容 |
+| POST | `/api/files/:id/collaborators` | 添加协作者 |
+| GET | `/api/shares` | 我的分享列表 |
+| POST | `/api/shares` | 创建分享链接 |
+| GET | `/api/share/:token` | 分享页信息（公开） |
+| GET | `/api/share/:token/download` | 分享下载（公开） |
 | POST | `/api/files/folders` | 创建文件夹 |
 | POST | `/api/files/upload` | 上传文件 |
 | GET | `/api/files/:id/download` | 下载文件 |

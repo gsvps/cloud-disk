@@ -18,4 +18,16 @@
   .input {
     @apply w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-brand-500 focus:ring-2;
   }
+  .label {
+    @apply mb-1 block text-xs font-medium text-slate-600;
+  }
+  .modal-backdrop {
+    @apply fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4;
+  }
+  .modal {
+    @apply max-h-[90vh] w-full max-w-md overflow-y-auto rounded-xl bg-white p-6 shadow-xl;
+  }
+  .modal-lg {
+    @apply max-w-4xl;
+  }
 }
