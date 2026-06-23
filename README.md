@@ -22,6 +22,17 @@
 
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/gsvps/cloud-disk)
 
+点击按钮后，Cloudflare 会读取 `wrangler.toml` 并**自动创建** D1、KV、R2 资源。默认命名如下（KV 与 R2 不可同名，已做区分）：
+
+| 资源 | 默认名称 | 说明 |
+|------|----------|------|
+| Worker | `cloud-disk` | 应用本身 |
+| D1 | `cloud-disk-db` | 用户与文件元数据 |
+| KV | `cloud-disk-KV` | 登录会话（由 Worker 名 + binding 生成） |
+| R2 | `cloud-disk-files` | 上传的文件内容 |
+
+部署完成后访问 Workers 域名，首次打开会引导创建管理员账号。
+
 ### 手动部署步骤
 
 #### 1. Fork 并克隆仓库
@@ -38,20 +49,15 @@ npm install
 npx wrangler login
 ```
 
-#### 3. 创建 Cloudflare 资源
+#### 3. 创建 Cloudflare 资源（可选，也可由 wrangler deploy 自动创建）
 
 ```bash
-# 创建 D1 数据库
-npx wrangler d1 create clouddisk-db
-
-# 创建 KV 命名空间
-npx wrangler kv namespace create KV
-
-# 创建 R2 存储桶
-npx wrangler r2 bucket create clouddisk-files
+npx wrangler d1 create cloud-disk-db
+npx wrangler kv namespace create cloud-disk-KV
+npx wrangler r2 bucket create cloud-disk-files
 ```
 
-将上述命令输出的 `database_id`、`id` 填入 `wrangler.toml` 对应位置。
+> 注意：KV 命名空间与 R2 存储桶**不能使用相同名称**，因此分别命名为 `cloud-disk-KV` 与 `cloud-disk-files`。
 
 #### 4. 构建并部署
 
@@ -60,11 +66,6 @@ npm run deploy:cloudflare
 ```
 
 该命令会依次：构建 CSS → 执行 D1 远程迁移 → 部署 Worker。
-
-#### 5. 访问应用
-
-部署完成后，终端会输出 Workers 访问地址（形如 `https://clouddisk.<账号>.workers.dev`）。  
-首次打开页面会引导创建管理员账号。
 
 ## API 规范
 

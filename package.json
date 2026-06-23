@@ -4,11 +4,25 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "npm run build:css",
     "build:css": "tailwindcss -i ./src/styles/input.css -o ./public/styles.css --minify",
-    "db:migrate": "wrangler d1 migrations apply clouddisk-db --remote",
-    "deploy": "wrangler deploy",
-    "deploy:cloudflare": "npm run build:css && npm run db:migrate && npm run deploy",
+    "db:migrate": "wrangler d1 migrations apply DB --remote",
+    "deploy": "npm run db:migrate && wrangler deploy",
+    "deploy:cloudflare": "npm run build && npm run deploy",
     "typecheck": "tsc --noEmit"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "D1 数据库，存储用户与文件元数据。默认名称：`cloud-disk-db`"
+      },
+      "KV": {
+        "description": "KV 命名空间，存储登录会话。默认名称：`cloud-disk-KV`（与 R2 不可同名）"
+      },
+      "R2": {
+        "description": "R2 存储桶，存储上传文件。默认名称：`cloud-disk-files`"
+      }
+    }
   },
   "dependencies": {
     "drizzle-orm": "^0.44.2",

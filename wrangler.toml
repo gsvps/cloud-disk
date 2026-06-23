@@ -1,4 +1,4 @@
-name = "clouddisk"
+name = "cloud-disk"
 main = "src/index.ts"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
@@ -7,24 +7,20 @@ compatibility_flags = ["nodejs_compat"]
 directory = "./public"
 binding = "ASSETS"
 
-# 部署前请先创建 D1 数据库：npx wrangler d1 create clouddisk-db
-# 将输出的 database_id 填入下方
+# 一键部署时会自动创建并绑定；database_name 为默认 D1 名称
 [[d1_databases]]
 binding = "DB"
-database_name = "clouddisk-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_name = "cloud-disk-db"
 migrations_dir = "migrations"
 
-# 部署前请先创建 KV：npx wrangler kv namespace create KV
-# 将输出的 id 填入下方
+# 一键部署时会自动创建；KV 无独立 name 字段，平台默认以 Worker 名 + binding 命名（如 cloud-disk-KV）
 [[kv_namespaces]]
 binding = "KV"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 
-# 部署前请先创建 R2：npx wrangler r2 bucket create clouddisk-files
+# bucket_name 必须与 KV 默认名区分，避免同名冲突
 [[r2_buckets]]
 binding = "R2"
-bucket_name = "clouddisk-files"
+bucket_name = "cloud-disk-files"
 
 [vars]
 APP_NAME = "CloudDisk"
