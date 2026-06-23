@@ -1,4 +1,9 @@
 const API = '/api';
+const SITE = {
+  github: 'https://github.com/gsvps/cloud-disk',
+  website: 'https://www.gsvps.com',
+  telegram: 'https://t.me/gsvpscom',
+};
 
 const state = {
   user: null,
@@ -17,6 +22,17 @@ const state = {
   shareFolderBreadcrumbs: [],
   shareFiles: [],
   sharePreviewFile: null,
+  page: 'files',
+  settingsTab: 'account',
+  registrationOpen: true,
+  adminUsers: [],
+  adminGroups: [],
+  adminSettings: null,
+  settingsLoading: false,
+  editingUserId: null,
+  editingGroupId: null,
+  showUserForm: false,
+  showGroupForm: false,
 };
 
 async function api(path, options = {}) {
@@ -93,6 +109,12 @@ async function initApp() {
     const setup = await api('/auth/setup-status');
     state.needsSetup = setup.needsSetup;
     if (!state.needsSetup) {
+      try {
+        const reg = await api('/auth/register-status');
+        state.registrationOpen = reg.registrationOpen;
+      } catch {
+        state.registrationOpen = true;
+      }
       try {
         const me = await api('/user/me');
         state.user = me.user;
@@ -239,16 +261,57 @@ function openShareModal(id, name, isFolder) {
   render();
 }
 
-function renderPreviewBody(info, mime) {
+function renderPreviewBody(info, mime, fullscreen = false) {
+  const frameClass = fullscreen ? 'preview-frame' : 'h-[70vh] w-full border-0';
+  const mediaClass = fullscreen ? 'preview-media' : 'max-h-[70vh] w-full object-contain';
   if (info.mode === 'office') {
-    return `<iframe src="${esc(info.embedUrl)}" class="h-[70vh] w-full"></iframe>`;
+    return `<iframe src="${esc(info.embedUrl)}" class="${frameClass}"></iframe>`;
   }
   const url = info.url;
-  if ((mime || '').startsWith('image/')) return `<img src="${url}" class="max-h-[70vh] w-full object-contain" />`;
-  if ((mime || '').startsWith('video/')) return `<video src="${url}" controls class="w-full"></video>`;
-  if ((mime || '').startsWith('audio/')) return `<audio src="${url}" controls class="w-full"></audio>`;
-  if (mime === 'application/pdf') return `<iframe src="${url}" class="h-[70vh] w-full"></iframe>`;
-  return `<iframe src="${url}" class="h-[70vh] w-full"></iframe>`;
+  if ((mime || '').startsWith('image/')) {
+    return `<div class="flex h-full w-full items-center justify-center p-4"><img src="${url}" class="${mediaClass}" alt="" /></div>`;
+  }
+  if ((mime || '').startsWith('video/')) {
+    return `<div class="flex h-full w-full items-center justify-center bg-black p-4"><video src="${url}" controls class="max-h-full max-w-full"></video></div>`;
+  }
+  if ((mime || '').startsWith('audio/')) {
+    return `<div class="flex h-full w-full items-center justify-center p-8"><audio src="${url}" controls class="w-full max-w-xl"></audio></div>`;
+  }
+  return `<iframe src="${url}" class="${frameClass}"></iframe>`;
+}
+
+function renderFooter() {
+  return `<footer class="site-footer">
+    <div class="mx-auto max-w-6xl px-4 py-5 text-center text-sm">
+      <p class="mb-2 text-xs text-slate-400">CloudDisk · 轻量协作网盘</p>
+      <div class="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+        <a href="${SITE.website}" target="_blank" rel="noopener noreferrer">官网 www.gsvps.com</a>
+        <span class="hidden text-slate-300 sm:inline">·</span>
+        <a href="${SITE.telegram}" target="_blank" rel="noopener noreferrer">交流群 t.me/gsvpscom</a>
+        <span class="hidden text-slate-300 sm:inline">·</span>
+        <a href="${SITE.github}" target="_blank" rel="noopener noreferrer">GitHub 仓库</a>
+      </div>
+    </div>
+  </footer>`;
+}
+
+function renderAppHeader(subtitle = '多人协作 · 分享 · 预览 · 编辑', extra = '') {
+  return `<header class="site-header">
+    <div class="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4">
+      <div class="flex items-center gap-3">
+        <div class="logo-badge">☁</div>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-slate-900">CloudDisk</h1>
+          <p class="text-xs text-slate-500">${subtitle}</p>
+        </div>
+      </div>
+      ${extra}
+    </div>
+  </header>`;
+}
+
+function userInitial(name) {
+  return esc((name || '?').charAt(0).toUpperCase());
 }
 
 function openCollabModal(id, name) {
@@ -427,8 +490,8 @@ function renderModal() {
   if (m.type === 'share') {
     if (m.result) {
       return `<div class="modal-backdrop"><div class="modal">
-        <h3 class="mb-3 text-lg font-semibold">分享已创建</h3>
-        <p class="mb-2 text-sm text-slate-600">文件：${esc(m.fileName)}</p>
+      <h3 class="mb-1 text-lg font-semibold text-slate-900">分享已创建</h3>
+      <p class="mb-4 text-sm text-slate-500">文件：${esc(m.fileName)}</p>
         <label class="text-xs text-slate-500">分享链接</label>
         <input class="input mb-2" readonly value="${esc(m.result.url)}" onclick="this.select()" />
         ${m.result.directUrl ? `<label class="text-xs text-slate-500">直链下载</label><input class="input mb-4" readonly value="${esc(m.result.directUrl)}" onclick="this.select()" />` : ''}
@@ -436,7 +499,8 @@ function renderModal() {
       </div></div>`;
     }
     return `<div class="modal-backdrop"><div class="modal">
-      <h3 class="mb-3 text-lg font-semibold">创建分享 · ${esc(m.fileName)}</h3>
+      <h3 class="mb-1 text-lg font-semibold text-slate-900">创建分享</h3>
+      <p class="mb-4 truncate text-sm text-slate-500">${esc(m.fileName)}</p>
       <form id="share-form" class="space-y-3">
         <div><label class="label">分享密码（可选）</label><input class="input" name="password" type="password" placeholder="留空则无需密码" /></div>
         <div><label class="label">有效期</label><select class="input" name="expires">
@@ -461,7 +525,8 @@ function renderModal() {
       )
       .join('');
     return `<div class="modal-backdrop"><div class="modal">
-      <h3 class="mb-3 text-lg font-semibold">协作 · ${esc(m.fileName)}</h3>
+      <h3 class="mb-1 text-lg font-semibold text-slate-900">协作管理</h3>
+      <p class="mb-4 truncate text-sm text-slate-500">${esc(m.fileName)}</p>
       <form id="collab-form" class="mb-4 space-y-2">
         <div class="relative">
           <input class="input" id="collab-username" name="username" placeholder="搜索用户名" required autocomplete="off" />
@@ -477,46 +542,433 @@ function renderModal() {
 
   if (m.type === 'preview') {
     if (m.loading) {
-      return `<div class="modal-backdrop"><div class="modal modal-lg"><p>加载预览...</p></div></div>`;
+      return `<div class="modal-backdrop modal-backdrop-full">
+        <div class="modal-fullscreen items-center justify-center">
+          <div class="flex flex-col items-center gap-3 text-slate-500">
+            <div class="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
+            <p>加载预览...</p>
+          </div>
+        </div>
+      </div>`;
     }
-    const body = renderPreviewBody(m.previewInfo, m.mime);
-    return `<div class="modal-backdrop"><div class="modal modal-lg"><div class="mb-2 flex items-center justify-between"><h3 class="font-semibold">${esc(m.fileName)}</h3><button id="modal-close" class="btn-secondary">关闭</button></div>${body}</div></div>`;
+    const body = renderPreviewBody(m.previewInfo, m.mime, true);
+    return `<div class="modal-backdrop modal-backdrop-full">
+      <div class="modal-fullscreen">
+        <div class="modal-fullscreen-header">
+          <div class="min-w-0">
+            <p class="text-xs font-medium uppercase tracking-wide text-brand-600">预览</p>
+            <h3 class="truncate font-semibold text-slate-900">${esc(m.fileName)}</h3>
+          </div>
+          <button id="modal-close" class="btn-secondary shrink-0">关闭</button>
+        </div>
+        <div class="modal-fullscreen-body">${body}</div>
+      </div>
+    </div>`;
   }
 
   if (m.type === 'edit') {
-    if (m.loading) return `<div class="modal-backdrop"><div class="modal modal-lg"><p>加载中...</p></div></div>`;
-    return `<div class="modal-backdrop"><div class="modal modal-lg">
-      <div class="mb-2 flex items-center justify-between"><h3 class="font-semibold">编辑 · ${esc(m.fileName)}</h3><button id="modal-close" class="btn-secondary">关闭</button></div>
-      <textarea id="edit-content" class="input h-96 font-mono text-sm">${esc(m.content)}</textarea>
-      <button id="save-edit" class="btn-primary mt-3 w-full">保存</button>
-    </div></div>`;
+    if (m.loading) {
+      return `<div class="modal-backdrop modal-backdrop-full">
+        <div class="modal-fullscreen items-center justify-center">
+          <div class="flex flex-col items-center gap-3 text-slate-500">
+            <div class="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
+            <p>加载中...</p>
+          </div>
+        </div>
+      </div>`;
+    }
+    return `<div class="modal-backdrop modal-backdrop-full">
+      <div class="modal-fullscreen">
+        <div class="modal-fullscreen-header">
+          <div class="min-w-0">
+            <p class="text-xs font-medium uppercase tracking-wide text-brand-600">在线编辑</p>
+            <h3 class="truncate font-semibold text-slate-900">${esc(m.fileName)}</h3>
+          </div>
+          <div class="flex shrink-0 gap-2">
+            <button id="modal-close" class="btn-secondary">取消</button>
+            <button id="save-edit" class="btn-primary">保存</button>
+          </div>
+        </div>
+        <div class="modal-fullscreen-body flex flex-col">
+          <textarea id="edit-content" class="edit-textarea flex-1">${esc(m.content)}</textarea>
+        </div>
+      </div>
+    </div>`;
   }
   return '';
 }
 
-function renderAuth() {
-  if (state.needsSetup) {
-    return `<div class="flex min-h-screen items-center justify-center p-4"><div class="w-full max-w-md rounded-2xl border bg-white p-8 shadow-sm">
-      <h1 class="mb-6 text-center text-2xl font-bold">CloudDisk 初始化</h1>
-      ${state.error ? `<div class="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-600">${esc(state.error)}</div>` : ''}
-      <form id="auth-form" class="space-y-4"><input class="input" name="username" required placeholder="管理员用户名" minlength="2" />
-      <input class="input" type="password" name="password" required placeholder="密码" minlength="6" />
-      <button class="btn-primary w-full">创建并进入</button></form></div></div>`;
+function isAdmin() {
+  return state.user?.role === 'admin' || state.user?.permissions?.canAdmin;
+}
+
+async function openSettings(tab = 'account') {
+  state.page = 'settings';
+  state.settingsTab = tab;
+  state.error = '';
+  clearError();
+  await loadSettingsData();
+}
+
+function backToFiles() {
+  state.page = 'files';
+  state.editingUserId = null;
+  state.editingGroupId = null;
+  state.showUserForm = false;
+  state.showGroupForm = false;
+  clearError();
+  render();
+}
+
+async function loadSettingsData() {
+  if (isAdmin()) {
+    state.settingsLoading = true;
+    render();
+  }
+  try {
+    if (isAdmin()) {
+      const [settings, usersData, groupsData] = await Promise.all([
+        api('/admin/settings'),
+        api('/admin/users'),
+        api('/admin/groups'),
+      ]);
+      state.adminSettings = settings;
+      state.registrationOpen = settings.registrationOpen;
+      state.adminUsers = usersData.users;
+      state.adminGroups = groupsData.groups;
+    }
+  } catch (err) {
+    setError(err.message);
+  } finally {
+    state.settingsLoading = false;
+    render();
+  }
+}
+
+async function savePassword(form) {
+  await api('/user/password', {
+    method: 'PUT',
+    body: JSON.stringify({
+      oldPassword: form.oldPassword.value,
+      newPassword: form.newPassword.value,
+    }),
+  });
+  form.reset();
+  alert('密码已更新');
+}
+
+async function saveRegistrationSetting(open) {
+  await api('/admin/settings', {
+    method: 'PUT',
+    body: JSON.stringify({ registrationOpen: open }),
+  });
+  state.adminSettings = { registrationOpen: open };
+  state.registrationOpen = open;
+  render();
+}
+
+async function submitNewUser(form) {
+  await api('/admin/users', {
+    method: 'POST',
+    body: JSON.stringify({
+      username: form.username.value.trim(),
+      password: form.password.value,
+      role: form.role.value,
+      groupId: form.role.value === 'admin' ? null : form.groupId.value || 'grp_default',
+      status: form.status.value,
+    }),
+  });
+  state.showUserForm = false;
+  await loadSettingsData();
+}
+
+async function submitEditUser(form, userId) {
+  const body = {
+    username: form.username.value.trim(),
+    role: form.role.value,
+    groupId: form.role.value === 'admin' ? null : form.groupId.value || 'grp_default',
+    status: form.status.value,
+  };
+  if (form.password.value) body.password = form.password.value;
+  await api(`/admin/users/${userId}`, { method: 'PATCH', body: JSON.stringify(body) });
+  state.editingUserId = null;
+  await loadSettingsData();
+}
+
+async function deleteAdminUser(userId, username) {
+  if (!confirm(`确定删除用户「${username}」？`)) return;
+  await api(`/admin/users/${userId}`, { method: 'DELETE' });
+  await loadSettingsData();
+}
+
+async function submitNewGroup(form) {
+  await api('/admin/groups', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: form.name.value.trim(),
+      description: form.description.value.trim() || undefined,
+      canUpload: form.canUpload.checked,
+      canShare: form.canShare.checked,
+      canCollab: form.canCollab.checked,
+      canAdmin: form.canAdmin.checked,
+    }),
+  });
+  state.showGroupForm = false;
+  await loadSettingsData();
+}
+
+async function submitEditGroup(form, groupId) {
+  await api(`/admin/groups/${groupId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      name: form.name.value.trim(),
+      description: form.description.value.trim() || undefined,
+      canUpload: form.canUpload.checked,
+      canShare: form.canShare.checked,
+      canCollab: form.canCollab.checked,
+      canAdmin: form.canAdmin.checked,
+    }),
+  });
+  state.editingGroupId = null;
+  await loadSettingsData();
+}
+
+async function deleteAdminGroup(groupId, name) {
+  if (!confirm(`确定删除用户组「${name}」？组内用户将移至默认用户组。`)) return;
+  await api(`/admin/groups/${groupId}`, { method: 'DELETE' });
+  await loadSettingsData();
+}
+
+function roleLabel(role) {
+  return role === 'admin' ? '管理员' : '普通用户';
+}
+
+function statusLabel(status) {
+  return status === 'disabled' ? '已禁用' : '正常';
+}
+
+function renderGroupOptions(selectedId, includeEmpty = false) {
+  const opts = (state.adminGroups || []).map(
+    (g) => `<option value="${esc(g.id)}" ${g.id === selectedId ? 'selected' : ''}>${esc(g.name)}</option>`
+  );
+  return `${includeEmpty ? '<option value="">无</option>' : ''}${opts.join('')}`;
+}
+
+function renderUserForm(user = null) {
+  const isEdit = !!user;
+  const id = user?.id || '';
+  return `<form id="${isEdit ? `edit-user-form-${id}` : 'new-user-form'}" class="card mb-4 space-y-3 p-4">
+    <h4 class="font-semibold text-slate-900">${isEdit ? '编辑用户' : '新建用户'}</h4>
+    <div class="grid gap-3 sm:grid-cols-2">
+      <div><label class="label">用户名</label><input class="input" name="username" required minlength="2" value="${esc(user?.username || '')}" /></div>
+      <div><label class="label">${isEdit ? '新密码（留空不改）' : '密码'}</label><input class="input" type="password" name="password" ${isEdit ? '' : 'required minlength="6"'} placeholder="${isEdit ? '留空则不修改' : '至少 6 位'}" /></div>
+      <div><label class="label">角色</label><select class="input" name="role"><option value="user" ${user?.role !== 'admin' ? 'selected' : ''}>普通用户</option><option value="admin" ${user?.role === 'admin' ? 'selected' : ''}>管理员</option></select></div>
+      <div><label class="label">用户组</label><select class="input" name="groupId">${renderGroupOptions(user?.groupId || 'grp_default')}</select></div>
+      <div><label class="label">状态</label><select class="input" name="status"><option value="active" ${user?.status !== 'disabled' ? 'selected' : ''}>正常</option><option value="disabled" ${user?.status === 'disabled' ? 'selected' : ''}>禁用</option></select></div>
+    </div>
+    <div class="flex gap-2">
+      <button type="submit" class="btn-primary">${isEdit ? '保存' : '创建用户'}</button>
+      <button type="button" class="btn-secondary" data-cancel-user-form>取消</button>
+    </div>
+  </form>`;
+}
+
+function renderGroupForm(group = null) {
+  const isEdit = !!group;
+  const id = group?.id || '';
+  const readonlyName = group?.id === 'grp_default';
+  return `<form id="${isEdit ? `edit-group-form-${id}` : 'new-group-form'}" class="card mb-4 space-y-3 p-4">
+    <h4 class="font-semibold text-slate-900">${isEdit ? '编辑用户组' : '新建用户组'}</h4>
+    <div class="grid gap-3 sm:grid-cols-2">
+      <div><label class="label">组名称</label><input class="input" name="name" required value="${esc(group?.name || '')}" ${readonlyName ? 'readonly' : ''} /></div>
+      <div><label class="label">描述</label><input class="input" name="description" value="${esc(group?.description || '')}" placeholder="可选" /></div>
+    </div>
+    <div class="flex flex-wrap gap-4 text-sm">
+      <label class="flex items-center gap-2"><input type="checkbox" name="canUpload" ${group?.canUpload !== false ? 'checked' : ''} /> 允许上传</label>
+      <label class="flex items-center gap-2"><input type="checkbox" name="canShare" ${group?.canShare !== false ? 'checked' : ''} /> 允许分享</label>
+      <label class="flex items-center gap-2"><input type="checkbox" name="canCollab" ${group?.canCollab !== false ? 'checked' : ''} /> 允许协作</label>
+      <label class="flex items-center gap-2"><input type="checkbox" name="canAdmin" ${group?.canAdmin ? 'checked' : ''} /> 管理后台</label>
+    </div>
+    <div class="flex gap-2">
+      <button type="submit" class="btn-primary">${isEdit ? '保存' : '创建用户组'}</button>
+      <button type="button" class="btn-secondary" data-cancel-group-form>取消</button>
+    </div>
+  </form>`;
+}
+
+function renderSettingsAccount() {
+  return `<div class="card p-6">
+    <h3 class="mb-1 text-lg font-semibold">修改密码</h3>
+    <p class="mb-4 text-sm text-slate-500">修改当前登录账号的密码</p>
+    <form id="password-form" class="max-w-md space-y-3">
+      <div><label class="label">原密码</label><input class="input" type="password" name="oldPassword" required /></div>
+      <div><label class="label">新密码</label><input class="input" type="password" name="newPassword" required minlength="6" placeholder="至少 6 位" /></div>
+      <button type="submit" class="btn-primary">更新密码</button>
+    </form>
+    <div class="mt-6 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
+      <p><span class="font-medium">当前账号：</span>${esc(state.user.username)}</p>
+      <p class="mt-1"><span class="font-medium">角色：</span>${roleLabel(state.user.role)}</p>
+      ${state.user.groupName ? `<p class="mt-1"><span class="font-medium">用户组：</span>${esc(state.user.groupName)}</p>` : ''}
+    </div>
+  </div>`;
+}
+
+function renderSettingsSystem() {
+  const open = state.adminSettings?.registrationOpen ?? state.registrationOpen;
+  return `<div class="card p-6">
+    <h3 class="mb-1 text-lg font-semibold">系统设置</h3>
+    <p class="mb-4 text-sm text-slate-500">控制是否允许新用户自行注册</p>
+    <label class="flex items-center gap-3 rounded-xl border border-slate-200 p-4">
+      <input type="checkbox" id="registration-open" ${open ? 'checked' : ''} class="h-4 w-4" />
+      <span><span class="font-medium">开放注册</span><br /><span class="text-sm text-slate-500">关闭后登录页将隐藏注册入口，仅管理员可新建用户</span></span>
+    </label>
+  </div>`;
+}
+
+function renderSettingsUsers() {
+  const editing = state.adminUsers.find((u) => u.id === state.editingUserId);
+  const rows = state.adminUsers
+    .map(
+      (u) => `<tr>
+        <td class="px-4 py-3 font-medium">${esc(u.username)}</td>
+        <td class="px-4 py-3 text-sm">${roleLabel(u.role)}</td>
+        <td class="px-4 py-3 text-sm">${esc(u.groupName || '—')}</td>
+        <td class="px-4 py-3 text-sm">${statusLabel(u.status)}</td>
+        <td class="px-4 py-3"><div class="flex justify-end gap-1">
+          <button class="btn-secondary px-2 py-1 text-xs" data-edit-user="${u.id}">编辑</button>
+          ${u.id !== state.user.id ? `<button class="btn-danger px-2 py-1 text-xs" data-del-user="${u.id}" data-username="${esc(u.username)}">删除</button>` : ''}
+        </div></td>
+      </tr>`
+    )
+    .join('');
+
+  return `<div>
+    <div class="mb-4 flex items-center justify-between gap-3">
+      <div><h3 class="text-lg font-semibold">用户管理</h3><p class="text-sm text-slate-500">新建、编辑用户与权限分配</p></div>
+      <button class="btn-primary" id="show-user-form-btn" ${state.showUserForm ? 'disabled' : ''}>新建用户</button>
+    </div>
+    ${state.showUserForm ? renderUserForm() : ''}
+    ${editing ? renderUserForm(editing) : ''}
+    <div class="card overflow-x-auto">
+      <table class="file-table w-full text-left"><thead><tr>
+        <th class="px-4 py-3">用户名</th><th class="px-4 py-3">角色</th><th class="px-4 py-3">用户组</th><th class="px-4 py-3">状态</th><th class="px-4 py-3 text-right">操作</th>
+      </tr></thead><tbody>${rows || '<tr><td colspan="5" class="px-6 py-8 text-center text-slate-400">暂无用户</td></tr>'}</tbody></table>
+    </div>
+  </div>`;
+}
+
+function renderSettingsGroups() {
+  const editing = state.adminGroups.find((g) => g.id === state.editingGroupId);
+  const rows = state.adminGroups
+    .map((g) => {
+      const perms = [
+        g.canUpload && '上传',
+        g.canShare && '分享',
+        g.canCollab && '协作',
+        g.canAdmin && '管理',
+      ]
+        .filter(Boolean)
+        .join(' · ') || '无';
+      return `<tr>
+        <td class="px-4 py-3 font-medium">${esc(g.name)}</td>
+        <td class="px-4 py-3 text-sm text-slate-500">${esc(g.description || '—')}</td>
+        <td class="px-4 py-3 text-sm">${esc(perms)}</td>
+        <td class="px-4 py-3"><div class="flex justify-end gap-1">
+          <button class="btn-secondary px-2 py-1 text-xs" data-edit-group="${g.id}">编辑</button>
+          ${g.id !== 'grp_default' ? `<button class="btn-danger px-2 py-1 text-xs" data-del-group="${g.id}" data-name="${esc(g.name)}">删除</button>` : ''}
+        </div></td>
+      </tr>`;
+    })
+    .join('');
+
+  return `<div>
+    <div class="mb-4 flex items-center justify-between gap-3">
+      <div><h3 class="text-lg font-semibold">用户组</h3><p class="text-sm text-slate-500">批量管理用户权限策略</p></div>
+      <button class="btn-primary" id="show-group-form-btn" ${state.showGroupForm ? 'disabled' : ''}>新建用户组</button>
+    </div>
+    ${state.showGroupForm ? renderGroupForm() : ''}
+    ${editing && !state.showGroupForm ? renderGroupForm(editing) : ''}
+    <div class="card overflow-x-auto">
+      <table class="file-table w-full text-left"><thead><tr>
+        <th class="px-4 py-3">名称</th><th class="px-4 py-3">描述</th><th class="px-4 py-3">权限</th><th class="px-4 py-3 text-right">操作</th>
+      </tr></thead><tbody>${rows}</tbody></table>
+    </div>
+  </div>`;
+}
+
+function renderSettings() {
+  const tabs = [{ id: 'account', label: '账号安全', admin: false }];
+  if (isAdmin()) {
+    tabs.push(
+      { id: 'system', label: '系统设置', admin: true },
+      { id: 'users', label: '用户管理', admin: true },
+      { id: 'groups', label: '用户组', admin: true }
+    );
   }
 
-  return `<div class="flex min-h-screen items-center justify-center p-4"><div class="w-full max-w-md rounded-2xl border bg-white p-8 shadow-sm">
-    <h1 class="mb-2 text-center text-2xl font-bold">CloudDisk</h1>
-    <p class="mb-6 text-center text-sm text-slate-500">多人协作网盘</p>
-    <div class="mb-4 flex rounded-lg bg-slate-100 p-1">
-      <button class="flex-1 rounded-md py-2 text-sm ${state.authMode === 'login' ? 'bg-white shadow' : ''}" data-auth-mode="login">登录</button>
-      <button class="flex-1 rounded-md py-2 text-sm ${state.authMode === 'register' ? 'bg-white shadow' : ''}" data-auth-mode="register">注册</button>
+  const nav = tabs
+    .map(
+      (t) =>
+        `<button class="settings-nav-item ${state.settingsTab === t.id ? 'settings-nav-active' : ''}" data-settings-tab="${t.id}">${t.label}</button>`
+    )
+    .join('');
+
+  let panel = '';
+  if (state.settingsLoading && isAdmin()) {
+    panel = '<div class="card p-8 text-center text-slate-500">加载设置...</div>';
+  } else if (state.settingsTab === 'account') panel = renderSettingsAccount();
+  else if (state.settingsTab === 'system') panel = renderSettingsSystem();
+  else if (state.settingsTab === 'users') panel = renderSettingsUsers();
+  else if (state.settingsTab === 'groups') panel = renderSettingsGroups();
+
+  return `<div class="flex min-h-screen flex-col">
+    ${renderAppHeader('系统设置', `<div class="flex items-center gap-2">
+      <button id="back-files-btn" class="btn-secondary">返回文件</button>
+      <button id="logout-btn" class="btn-secondary">退出</button>
+    </div>`)}
+    <main class="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+      ${state.error ? `<div class="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-600">${esc(state.error)}</div>` : ''}
+      <div class="grid gap-6 lg:grid-cols-[220px_1fr]">
+        <nav class="settings-nav">${nav}</nav>
+        <div>${panel}</div>
+      </div>
+    </main>
+    ${renderFooter()}
+  </div>`;
+}
+
+function renderAuth() {
+  const cardInner = state.needsSetup
+    ? `<h1 class="mb-2 text-center text-2xl font-bold text-slate-900">CloudDisk 初始化</h1>
+      <p class="mb-6 text-center text-sm text-slate-500">创建第一个管理员账号</p>`
+    : `<div class="mb-6 flex flex-col items-center">
+        <div class="logo-badge mb-3 h-14 w-14 text-2xl">☁</div>
+        <h1 class="text-2xl font-bold text-slate-900">CloudDisk</h1>
+        <p class="mt-1 text-sm text-slate-500">多人协作网盘</p>
+      </div>`;
+
+  const authActions = state.needsSetup
+    ? `<button type="submit" class="btn-primary w-full">创建并进入</button>`
+    : `<div class="flex gap-2 pt-1">
+        <button type="button" id="auth-login-btn" class="btn-primary flex-1">登录</button>
+        <button type="button" id="auth-register-btn" class="btn-secondary flex-1" ${state.registrationOpen ? '' : 'disabled title="当前未开放注册"'}>注册</button>
+      </div>
+      ${!state.registrationOpen ? '<p class="text-center text-xs text-slate-400">注册已关闭，请联系管理员开通账号</p>' : ''}`;
+
+  return `<div class="flex min-h-screen flex-col">
+    <div class="flex flex-1 items-center justify-center p-4">
+      <div class="auth-card">
+        ${cardInner}
+        ${state.error ? `<div class="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-600">${esc(state.error)}</div>` : ''}
+        <form id="auth-form" class="space-y-4">
+          <div><label class="label">用户名</label><input class="input" name="username" required placeholder="请输入用户名" minlength="2" /></div>
+          <div><label class="label">密码</label><input class="input" type="password" name="password" required placeholder="至少 6 位" minlength="6" /></div>
+          ${authActions}
+        </form>
+      </div>
     </div>
-    ${state.error ? `<div class="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-600">${esc(state.error)}</div>` : ''}
-    <form id="auth-form" class="space-y-4">
-      <input class="input" name="username" required placeholder="用户名" minlength="2" />
-      <input class="input" type="password" name="password" required placeholder="密码" minlength="6" />
-      <button class="btn-primary w-full">${state.authMode === 'login' ? '登录' : '注册'}</button>
-    </form></div></div>`;
+    ${renderFooter()}
+  </div>`;
 }
 
 function renderFileActions(f) {
@@ -549,34 +1001,58 @@ function renderMain() {
     .map((c, i) => `<button class="text-sm ${i === state.breadcrumbs.length - 1 ? 'font-medium text-slate-900' : 'text-brand-600 hover:underline'}" data-crumb="${i}">${esc(c.name)}</button>`)
     .join('<span class="mx-2 text-slate-300">/</span>');
 
-  const rows = state.files
-    .map(
-      (f) => `<tr class="border-b hover:bg-slate-50">
-      <td class="px-4 py-3"><button class="flex items-center gap-2 text-left ${f.isFolder ? 'font-medium hover:text-brand-600' : ''}" data-action="${f.isFolder ? 'open' : 'previewable-open'}" data-id="${f.id}" data-name="${esc(f.name)}" data-preview="${f.previewable}" data-mime="${esc(f.mimeType || '')}">${f.isFolder ? '📁' : '📄'} ${esc(f.name)}</button></td>
+  const rows = state.files.length
+    ? state.files
+        .map(
+          (f) => `<tr>
+      <td class="px-4 py-3"><button class="flex items-center gap-2.5 text-left ${f.isFolder ? 'font-semibold text-slate-800 hover:text-brand-600' : 'text-slate-700 hover:text-brand-600'}" data-action="${f.isFolder ? 'open' : 'previewable-open'}" data-id="${f.id}" data-name="${esc(f.name)}" data-preview="${f.previewable}" data-mime="${esc(f.mimeType || '')}"><span class="text-lg">${f.isFolder ? '📁' : '📄'}</span><span class="truncate">${esc(f.name)}</span></button></td>
       <td class="hidden px-4 py-3 text-sm text-slate-500 sm:table-cell">${f.isFolder ? '—' : formatBytes(f.size)}</td>
       <td class="hidden px-4 py-3 text-sm text-slate-500 md:table-cell">${formatDate(f.createdAt)}</td>
-      <td class="px-4 py-3"><div class="flex flex-wrap justify-end gap-1">${renderFileActions(f)}</div></td></tr>`
-    )
-    .join('');
+      <td class="px-4 py-3"><div class="flex flex-wrap justify-end gap-1.5">${renderFileActions(f)}</div></td></tr>`
+        )
+        .join('')
+    : '';
 
-  return `<div class="min-h-screen bg-slate-50">
-    <header class="border-b bg-white"><div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-      <div><h1 class="text-lg font-bold">CloudDisk</h1><p class="text-xs text-slate-500">多人协作 · 分享 · 预览 · 编辑</p></div>
-      <div class="flex items-center gap-3"><span class="text-sm">${esc(state.user.username)}</span><button id="logout-btn" class="btn-secondary">退出</button></div>
-    </div></header>
-    <main class="mx-auto max-w-6xl px-4 py-6">
-      ${state.error ? `<div class="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-600">${esc(state.error)}</div>` : ''}
-      <div class="mb-4 flex flex-wrap gap-2">
-        <button class="${state.scope === 'mine' ? 'btn-primary' : 'btn-secondary'}" data-scope="mine">我的文件</button>
-        <button class="${state.scope === 'shared' ? 'btn-primary' : 'btn-secondary'}" data-scope="shared">与我共享</button>
+  const emptyState = `<div class="flex flex-col items-center justify-center px-6 py-16 text-center">
+    <div class="mb-4 text-5xl opacity-40">📂</div>
+    <p class="font-medium text-slate-600">暂无文件</p>
+    <p class="mt-1 text-sm text-slate-400">${state.scope === 'mine' ? '上传文件或新建文件夹开始使用' : '还没有人与你共享文件'}</p>
+  </div>`;
+
+  return `<div class="flex min-h-screen flex-col">
+    ${renderAppHeader('多人协作 · 分享 · 预览 · 编辑', `<div class="flex items-center gap-2 sm:gap-3">
+      <div class="user-pill"><span class="user-avatar">${userInitial(state.user.username)}</span><span class="hidden sm:inline">${esc(state.user.username)}</span></div>
+      <button id="settings-btn" class="btn-secondary">设置</button>
+      <button id="logout-btn" class="btn-secondary">退出</button>
+    </div>`)}
+    <main class="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+      ${state.error ? `<div class="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-600">${esc(state.error)}</div>` : ''}
+      <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <div class="scope-tabs">
+          <button class="scope-tab ${state.scope === 'mine' ? 'scope-tab-active' : ''}" data-scope="mine">我的文件</button>
+          <button class="scope-tab ${state.scope === 'shared' ? 'scope-tab-active' : ''}" data-scope="shared">与我共享</button>
+        </div>
+        ${state.scope === 'mine' && state.user.permissions?.canUpload !== false ? `<div class="flex gap-2">
+          <button id="newfolder-btn" class="btn-secondary">新建文件夹</button>
+          <label class="btn-primary cursor-pointer">${state.uploading ? '上传中...' : '上传文件'}<input id="file-input" type="file" multiple class="hidden" /></label>
+        </div>` : ''}
       </div>
-      <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <nav>${crumbs}</nav>
-        ${state.scope === 'mine' ? `<div class="flex gap-2"><button id="newfolder-btn" class="btn-secondary">新建文件夹</button>
-          <label class="btn-primary cursor-pointer">${state.uploading ? '上传中...' : '上传'}<input id="file-input" type="file" multiple class="hidden" /></label></div>` : ''}
+      <div class="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-white/60 px-4 py-2.5 text-sm shadow-sm">
+        <span class="text-slate-400">路径</span>
+        <nav class="flex flex-wrap items-center">${crumbs}</nav>
       </div>
-      <div id="drop-zone" class="overflow-hidden rounded-xl border bg-white">${rows || '<p class="p-8 text-center text-slate-400">暂无文件</p>'}</div>
-    </main>${renderModal()}</div>`;
+      <div id="drop-zone" class="card">
+        ${rows ? `<div class="overflow-x-auto"><table class="file-table w-full text-left"><thead><tr>
+          <th class="px-4 py-3">名称</th>
+          <th class="hidden px-4 py-3 sm:table-cell">大小</th>
+          <th class="hidden px-4 py-3 md:table-cell">创建时间</th>
+          <th class="px-4 py-3 text-right">操作</th>
+        </tr></thead><tbody>${rows}</tbody></table></div>` : emptyState}
+      </div>
+    </main>
+    ${renderFooter()}
+    ${renderModal()}
+  </div>`;
 }
 
 function renderShareFolderView() {
@@ -587,18 +1063,28 @@ function renderShareFolderView() {
   if (state.sharePreviewFile) {
     const f = state.sharePreviewFile;
     if (f.loading) {
-      return `<div class="mx-auto max-w-4xl p-6"><p>加载预览...</p></div>`;
+      return `<div class="flex min-h-screen flex-col">
+        <div class="flex flex-1 items-center justify-center">
+          <div class="flex flex-col items-center gap-3 text-slate-500">
+            <div class="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
+            <p>加载预览...</p>
+          </div>
+        </div>
+        ${renderFooter()}
+      </div>`;
     }
-    const preview = info.allowPreview ? renderPreviewBody(f.previewInfo, f.mimeType) : '';
+    const preview = info.allowPreview ? renderPreviewBody(f.previewInfo, f.mimeType, true) : '';
     const downloadUrl = `${API}/share/${token}/files/${f.id}/download${q}`;
-    return `<div class="mx-auto max-w-4xl p-6">
-      <button class="mb-4 text-sm text-brand-600 hover:underline" id="share-back-folder">← 返回文件夹</button>
-      <h1 class="mb-2 text-xl font-bold">${esc(f.name)}</h1>
-      <p class="mb-4 text-sm text-slate-500">${formatBytes(f.size)} · ${f.mimeType || '未知类型'}</p>
-      ${preview}
-      <div class="mt-4 flex flex-wrap gap-2">
-        ${info.allowDownload ? `<a class="btn-primary" href="${downloadUrl}" target="_blank">下载</a>` : ''}
-      </div></div>`;
+    return `<div class="fixed inset-0 z-40 flex flex-col bg-white">
+      <div class="modal-fullscreen-header">
+        <div class="min-w-0">
+          <button class="mb-1 text-sm text-brand-600 hover:underline" id="share-back-folder">← 返回文件夹</button>
+          <h1 class="truncate text-lg font-semibold">${esc(f.name)}</h1>
+        </div>
+        ${info.allowDownload ? `<a class="btn-primary shrink-0" href="${downloadUrl}" target="_blank">下载</a>` : ''}
+      </div>
+      <div class="modal-fullscreen-body">${preview}</div>
+    </div>`;
   }
 
   const crumbs = state.shareFolderBreadcrumbs
@@ -624,14 +1110,28 @@ function renderShareFolderView() {
     })
     .join('');
 
-  return `<div class="mx-auto max-w-4xl p-6">
-    <h1 class="mb-2 text-xl font-bold">📁 ${esc(info.name)}</h1>
-    <p class="mb-4 text-sm text-slate-500">文件夹分享 · 浏览并下载内容</p>
-    <nav class="mb-4">${crumbs}</nav>
-    <div class="overflow-hidden rounded-xl border bg-white">
-      <table class="w-full text-left"><thead><tr class="border-b bg-slate-50 text-sm text-slate-500"><th class="px-4 py-2">名称</th><th class="px-4 py-2">大小</th><th class="px-4 py-2 text-right">操作</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="3" class="p-8 text-center text-slate-400">空文件夹</td></tr>'}</tbody></table>
-    </div></div>`;
+  return `<div class="flex min-h-screen flex-col">
+    ${renderAppHeader('外链分享', '')}
+    <main class="mx-auto w-full max-w-4xl flex-1 px-4 py-6">
+      <div class="mb-5">
+        <h1 class="text-xl font-bold text-slate-900">📁 ${esc(info.name)}</h1>
+        <p class="mt-1 text-sm text-slate-500">文件夹分享 · 浏览并下载内容</p>
+      </div>
+      <div class="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-white/60 px-4 py-2.5 text-sm shadow-sm">
+        <span class="text-slate-400">路径</span>
+        <nav class="flex flex-wrap items-center">${crumbs}</nav>
+      </div>
+      <div class="card overflow-x-auto">
+        <table class="file-table w-full text-left"><thead><tr>
+          <th class="px-4 py-3">名称</th>
+          <th class="px-4 py-3">大小</th>
+          <th class="px-4 py-3 text-right">操作</th>
+        </tr></thead>
+        <tbody>${rows || '<tr><td colspan="3" class="px-6 py-16 text-center text-slate-400">空文件夹</td></tr>'}</tbody></table>
+      </div>
+    </main>
+    ${renderFooter()}
+  </div>`;
 }
 
 function renderShareFileView() {
@@ -644,36 +1144,70 @@ function renderShareFileView() {
   let preview = '';
   if (info.allowPreview) {
     if (info.previewMode === 'office' && info.previewable) {
-      preview = `<iframe src="https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(previewUrl)}" class="h-96 w-full"></iframe>`;
+      preview = `<iframe src="https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(previewUrl)}" class="preview-frame min-h-[60vh]"></iframe>`;
     } else if ((info.mimeType || '').startsWith('image/')) {
-      preview = `<img src="${previewUrl}" class="max-h-96 w-full object-contain" />`;
+      preview = `<div class="flex min-h-[40vh] items-center justify-center rounded-xl bg-slate-50 p-4"><img src="${previewUrl}" class="preview-media" alt="" /></div>`;
     } else if (info.previewable) {
-      preview = `<iframe src="${previewUrl}" class="h-96 w-full"></iframe>`;
+      preview = `<iframe src="${previewUrl}" class="preview-frame min-h-[60vh] w-full rounded-xl border border-slate-200"></iframe>`;
     }
   }
 
-  return `<div class="mx-auto max-w-3xl p-6">
-    <h1 class="mb-2 text-xl font-bold">${esc(info.name)}</h1>
-    <p class="mb-4 text-sm text-slate-500">${formatBytes(info.size)} · ${info.mimeType || '未知类型'}</p>
-    ${preview}
-    <div class="mt-4 flex flex-wrap gap-2">
-      ${info.allowDownload ? `<a class="btn-primary" href="${downloadUrl}" target="_blank">下载</a>` : ''}
-      ${info.allowEdit ? `<button class="btn-secondary" id="share-edit-btn">在线编辑</button>` : ''}
-    </div></div>`;
+  return `<div class="flex min-h-screen flex-col">
+    ${renderAppHeader('外链分享', '')}
+    <main class="mx-auto w-full max-w-4xl flex-1 px-4 py-6">
+      <div class="card p-6">
+        <h1 class="mb-1 text-xl font-bold text-slate-900">${esc(info.name)}</h1>
+        <p class="mb-5 text-sm text-slate-500">${formatBytes(info.size)} · ${info.mimeType || '未知类型'}</p>
+        ${preview}
+        <div class="mt-5 flex flex-wrap gap-2">
+          ${info.allowDownload ? `<a class="btn-primary" href="${downloadUrl}" target="_blank">下载</a>` : ''}
+          ${info.allowEdit ? `<button class="btn-secondary" id="share-edit-btn">在线编辑</button>` : ''}
+        </div>
+      </div>
+    </main>
+    ${renderFooter()}
+  </div>`;
 }
 
 function renderSharePageView() {
   const info = state.shareInfo;
-  if (state.shareError) return `<div class="flex min-h-screen items-center justify-center"><p class="text-red-500">${esc(state.shareError)}</p></div>`;
-  if (!info) return `<div class="flex min-h-screen items-center justify-center"><p>加载中...</p></div>`;
-  if (info.expired) return `<div class="flex min-h-screen items-center justify-center"><p class="text-red-500">分享已过期</p></div>`;
+  if (state.shareError) {
+    return `<div class="flex min-h-screen flex-col">
+      <div class="flex flex-1 items-center justify-center p-4"><p class="rounded-xl bg-red-50 px-4 py-3 text-red-600">${esc(state.shareError)}</p></div>
+      ${renderFooter()}
+    </div>`;
+  }
+  if (!info) {
+    return `<div class="flex min-h-screen flex-col">
+      <div class="flex flex-1 flex-col items-center justify-center gap-3 text-slate-500">
+        <div class="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
+        <p>加载中...</p>
+      </div>
+      ${renderFooter()}
+    </div>`;
+  }
+  if (info.expired) {
+    return `<div class="flex min-h-screen flex-col">
+      <div class="flex flex-1 items-center justify-center"><p class="text-red-500">分享已过期</p></div>
+      ${renderFooter()}
+    </div>`;
+  }
 
   if (state.shareNeedsPassword) {
-    return `<div class="flex min-h-screen items-center justify-center p-4"><div class="w-full max-w-md rounded-xl border bg-white p-6">
-      <h2 class="mb-4 text-lg font-semibold">${esc(info.name)}</h2>
-      <p class="mb-4 text-sm text-slate-500">此分享需要密码</p>
-      <form id="share-pwd-form" class="space-y-3"><input class="input" type="password" name="password" required placeholder="分享密码" />
-      <button class="btn-primary w-full">验证</button></form></div></div>`;
+    return `<div class="flex min-h-screen flex-col">
+      <div class="flex flex-1 items-center justify-center p-4">
+        <div class="auth-card">
+          <div class="mb-4 flex justify-center"><div class="logo-badge">🔗</div></div>
+          <h2 class="mb-1 text-center text-lg font-semibold">${esc(info.name)}</h2>
+          <p class="mb-6 text-center text-sm text-slate-500">此分享需要密码</p>
+          <form id="share-pwd-form" class="space-y-3">
+            <input class="input" type="password" name="password" required placeholder="请输入分享密码" />
+            <button class="btn-primary w-full">验证并进入</button>
+          </form>
+        </div>
+      </div>
+      ${renderFooter()}
+    </div>`;
   }
 
   if (info.isFolder) return renderShareFolderView();
@@ -683,7 +1217,13 @@ function renderSharePageView() {
 function render() {
   const app = document.getElementById('app');
   if (state.loading) {
-    app.innerHTML = '<div class="flex min-h-screen items-center justify-center">加载中...</div>';
+    app.innerHTML = `<div class="flex min-h-screen flex-col">
+      <div class="flex flex-1 flex-col items-center justify-center gap-3 text-slate-500">
+        <div class="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-t-transparent"></div>
+        <p>加载中...</p>
+      </div>
+      ${renderFooter()}
+    </div>`;
     return;
   }
   if (state.sharePage) {
@@ -697,6 +1237,11 @@ function render() {
     bindAuthEvents();
     return;
   }
+  if (state.page === 'settings') {
+    app.innerHTML = renderSettings();
+    bindSettingsEvents();
+    return;
+  }
   app.innerHTML = renderMain();
   bindMainEvents();
 }
@@ -705,15 +1250,108 @@ function bindAuthEvents() {
   document.getElementById('auth-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     if (state.needsSetup) handleSetup(e);
-    else if (state.authMode === 'register') handleRegister(e);
-    else handleLogin(e);
   });
-  document.querySelectorAll('[data-auth-mode]').forEach((el) => {
+  document.getElementById('auth-login-btn')?.addEventListener('click', () => {
+    const form = document.getElementById('auth-form');
+    if (!form || state.needsSetup) return;
+    handleLogin({ preventDefault: () => {}, target: form });
+  });
+  document.getElementById('auth-register-btn')?.addEventListener('click', () => {
+    if (!state.registrationOpen) return;
+    const form = document.getElementById('auth-form');
+    if (!form || state.needsSetup) return;
+    handleRegister({ preventDefault: () => {}, target: form });
+  });
+}
+
+function bindSettingsEvents() {
+  document.getElementById('back-files-btn')?.addEventListener('click', backToFiles);
+  document.getElementById('logout-btn')?.addEventListener('click', handleLogout);
+  document.querySelectorAll('[data-settings-tab]').forEach((el) => {
     el.addEventListener('click', () => {
-      state.authMode = el.dataset.authMode;
+      state.settingsTab = el.dataset.settingsTab;
+      state.editingUserId = null;
+      state.editingGroupId = null;
       clearError();
       render();
     });
+  });
+  document.getElementById('password-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    savePassword(e.target).catch((err) => alert(err.message));
+  });
+  document.getElementById('registration-open')?.addEventListener('change', (e) => {
+    saveRegistrationSetting(e.target.checked).catch((err) => alert(err.message));
+  });
+  document.getElementById('show-user-form-btn')?.addEventListener('click', () => {
+    state.showUserForm = true;
+    state.editingUserId = null;
+    render();
+  });
+  document.getElementById('show-group-form-btn')?.addEventListener('click', () => {
+    state.showGroupForm = true;
+    state.editingGroupId = null;
+    render();
+  });
+  document.querySelectorAll('[data-cancel-user-form]').forEach((el) => {
+    el.addEventListener('click', () => {
+      state.showUserForm = false;
+      state.editingUserId = null;
+      render();
+    });
+  });
+  document.querySelectorAll('[data-cancel-group-form]').forEach((el) => {
+    el.addEventListener('click', () => {
+      state.showGroupForm = false;
+      state.editingGroupId = null;
+      render();
+    });
+  });
+  document.getElementById('new-user-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitNewUser(e.target).catch((err) => alert(err.message));
+  });
+  document.querySelectorAll('[id^="edit-user-form-"]').forEach((form) => {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const userId = form.id.replace('edit-user-form-', '');
+      submitEditUser(form, userId).catch((err) => alert(err.message));
+    });
+  });
+  document.querySelectorAll('[data-edit-user]').forEach((el) => {
+    el.addEventListener('click', () => {
+      state.editingUserId = el.dataset.editUser;
+      state.showUserForm = false;
+      render();
+    });
+  });
+  document.querySelectorAll('[data-del-user]').forEach((el) => {
+    el.addEventListener('click', () =>
+      deleteAdminUser(el.dataset.delUser, el.dataset.username).catch((err) => alert(err.message))
+    );
+  });
+  document.getElementById('new-group-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitNewGroup(e.target).catch((err) => alert(err.message));
+  });
+  document.querySelectorAll('[id^="edit-group-form-"]').forEach((form) => {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const groupId = form.id.replace('edit-group-form-', '');
+      submitEditGroup(form, groupId).catch((err) => alert(err.message));
+    });
+  });
+  document.querySelectorAll('[data-edit-group]').forEach((el) => {
+    el.addEventListener('click', () => {
+      state.editingGroupId = el.dataset.editGroup;
+      state.showGroupForm = false;
+      render();
+    });
+  });
+  document.querySelectorAll('[data-del-group]').forEach((el) => {
+    el.addEventListener('click', () =>
+      deleteAdminGroup(el.dataset.delGroup, el.dataset.name).catch((err) => alert(err.message))
+    );
   });
 }
 
@@ -805,6 +1443,7 @@ function bindCollabAutocomplete() {
 }
 
 function bindMainEvents() {
+  document.getElementById('settings-btn')?.addEventListener('click', () => openSettings('account').catch((err) => alert(err.message)));
   document.getElementById('logout-btn')?.addEventListener('click', handleLogout);
   document.getElementById('newfolder-btn')?.addEventListener('click', createFolder);
   document.querySelectorAll('[data-scope]').forEach((el) => el.addEventListener('click', () => switchScope(el.dataset.scope)));
@@ -861,8 +1500,8 @@ function bindMainEvents() {
 
   const dropZone = document.getElementById('drop-zone');
   if (dropZone && state.scope === 'mine') {
-    ['dragenter', 'dragover'].forEach((evt) => dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.add('ring-2', 'ring-brand-500'); }));
-    ['dragleave', 'drop'].forEach((evt) => dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.remove('ring-2', 'ring-brand-500'); }));
+    ['dragenter', 'dragover'].forEach((evt) => dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.add('drop-zone-active'); }));
+    ['dragleave', 'drop'].forEach((evt) => dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.remove('drop-zone-active'); }));
     dropZone.addEventListener('drop', (e) => uploadFiles([...e.dataTransfer.files]));
   }
 }

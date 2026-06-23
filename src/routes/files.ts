@@ -12,6 +12,7 @@ import {
   getOwnedParent,
   listAccessibleFiles,
 } from '../lib/file-access';
+import { getUserPermissions } from '../lib/user-permissions';
 import {
   contentDisposition,
   getOfficeEmbedUrl,
@@ -124,6 +125,10 @@ filesRouter.post('/upload', async (c) => {
   if (!name) return jsonFail(c, 'BAD_REQUEST', '文件名无效');
 
   const db = createDb(c.env.DB);
+  const perms = await getUserPermissions(db, user.userId);
+  if (!perms?.canUpload) {
+    return jsonFail(c, 'FORBIDDEN', '当前账号无上传权限', 403);
+  }
   if (!(await getOwnedParent(db, user.userId, parentId))) {
     return jsonFail(c, 'NOT_FOUND', '目标文件夹不存在或无写入权限', 404);
   }

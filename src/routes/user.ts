@@ -3,7 +3,9 @@ import { and, eq, like, ne } from 'drizzle-orm';
 import type { Env } from '../env';
 import { createDb } from '../db';
 import { users } from '../db/schema';
-import { jsonOk } from '../lib/response';
+import { verifyPassword, hashPassword } from '../lib/crypto';
+import { getUserPermissions } from '../lib/user-permissions';
+import { jsonFail, jsonOk } from '../lib/response';
 import { authMiddleware, type AuthVariables } from '../middleware/auth';
 
 const userRouter = new Hono<{ Bindings: Env; Variables: AuthVariables }>();
@@ -13,14 +15,54 @@ userRouter.use('*', authMiddleware);
 userRouter.get('/me', async (c) => {
   const session = c.get('user');
   const db = createDb(c.env.DB);
-  const [user] = await db.select().from(users).where(eq(users.id, session.userId)).limit(1);
+  const perms = await getUserPermissions(db, session.userId);
+  if (!perms) return jsonFail(c, 'NOT_FOUND', '用户不存在', 404);
+
   return jsonOk(c, {
     user: {
       id: session.userId,
       username: session.username,
-      role: user?.role ?? 'user',
+      role: perms.user.role,
+      groupId: perms.user.groupId,
+      groupName: perms.group?.name ?? null,
+      status: perms.user.status,
+      permissions: {
+        canUpload: perms.canUpload,
+        canShare: perms.canShare,
+        canCollab: perms.canCollab,
+        canAdmin: perms.canAdmin,
+      },
     },
   });
+});
+
+userRouter.put('/password', async (c) => {
+  const session = c.get('user');
+  const body = await c.req.json<{ oldPassword?: string; newPassword?: string }>();
+  const oldPassword = body.oldPassword;
+  const newPassword = body.newPassword;
+
+  if (!oldPassword || !newPassword) {
+    return jsonFail(c, 'BAD_REQUEST', '请填写原密码和新密码');
+  }
+  if (newPassword.length < 6) {
+    return jsonFail(c, 'BAD_REQUEST', '新密码至少 6 位');
+  }
+
+  const db = createDb(c.env.DB);
+  const [user] = await db.select().from(users).where(eq(users.id, session.userId)).limit(1);
+  if (!user) return jsonFail(c, 'NOT_FOUND', '用户不存在', 404);
+
+  if (!(await verifyPassword(oldPassword, user.passwordHash))) {
+    return jsonFail(c, 'BAD_REQUEST', '原密码不正确');
+  }
+
+  await db
+    .update(users)
+    .set({ passwordHash: await hashPassword(newPassword) })
+    .where(eq(users.id, session.userId));
+
+  return jsonOk(c, { updated: true });
 });
 
 userRouter.get('/search', async (c) => {

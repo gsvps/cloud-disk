@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import type { Env } from './env';
+import admin from './routes/admin';
 import auth from './routes/auth';
 import files from './routes/files';
 import { previewPublicRouter } from './routes/preview-public';
@@ -13,6 +14,7 @@ app.get('/api/health', (c) =>
   c.json({ success: true, data: { status: 'ok', app: c.env.APP_NAME || 'CloudDisk' } })
 );
 
+app.route('/api/admin', admin);
 app.route('/api/auth', auth);
 app.route('/api/user', user);
 app.route('/api/files', files);

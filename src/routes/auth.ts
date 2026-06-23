@@ -4,6 +4,8 @@ import type { Env } from '../env';
 import { createDb } from '../db';
 import { users } from '../db/schema';
 import { generateId, hashPassword, verifyPassword } from '../lib/crypto';
+import { isRegistrationOpen } from '../lib/settings';
+import { isUserActive } from '../lib/user-permissions';
 import { jsonFail, jsonOk } from '../lib/response';
 import {
   clearSessionCookie,
@@ -14,6 +16,16 @@ import {
 } from '../middleware/auth';
 
 const auth = new Hono<{ Bindings: Env; Variables: AuthVariables }>();
+
+auth.get('/register-status', async (c) => {
+  const db = createDb(c.env.DB);
+  const existing = await db.select({ id: users.id }).from(users).limit(1);
+  if (existing.length === 0) {
+    return jsonOk(c, { registrationOpen: false, needsSetup: true });
+  }
+  const registrationOpen = await isRegistrationOpen(db);
+  return jsonOk(c, { registrationOpen, needsSetup: false });
+});
 
 auth.get('/setup-status', async (c) => {
   const db = createDb(c.env.DB);
@@ -72,6 +84,9 @@ auth.post('/login', async (c) => {
   if (!user || !(await verifyPassword(password, user.passwordHash))) {
     return jsonFail(c, 'UNAUTHORIZED', '用户名或密码错误', 401);
   }
+  if (!isUserActive(user)) {
+    return jsonFail(c, 'FORBIDDEN', '账号已禁用，请联系管理员', 403);
+  }
 
   const token = await createSession(c.env.KV, { userId: user.id, username: user.username });
   c.header('Set-Cookie', sessionCookie(token));
@@ -104,6 +119,11 @@ auth.post('/register', async (c) => {
     return jsonFail(c, 'FORBIDDEN', '请先完成系统初始化', 403);
   }
 
+  const registrationOpen = await isRegistrationOpen(db);
+  if (!registrationOpen) {
+    return jsonFail(c, 'FORBIDDEN', '当前未开放注册', 403);
+  }
+
   const body = await c.req.json<{ username?: string; password?: string }>();
   const username = body.username?.trim();
   const password = body.password;
@@ -125,6 +145,8 @@ auth.post('/register', async (c) => {
     username,
     passwordHash: await hashPassword(password),
     role: 'user',
+    groupId: 'grp_default',
+    status: 'active',
     createdAt: now,
   });
 
