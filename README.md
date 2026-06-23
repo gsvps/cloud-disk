@@ -5,7 +5,7 @@
 基于 Cloudflare Workers 的轻量级个人网盘，**仅面向 Cloudflare 云端部署**，免费、无需 VPS、无需 MySQL。
 
 > **国内用户说明**  
-> 部署或使用 Cloudflare 时，部分功能（如绑定支付方式、升级套餐、开通特定服务等）可能需要账户关联 **Visa 或 Mastercard**。若国内银行卡无法完成验证，可参考作者实测的跨境虚拟卡开通方式：[Roogoo 虚拟信用卡实测与开卡指南](https://www.gsvps.com/articles/tutorials-2)。
+> 部署或使用 Cloudflare 时，部分功能（如绑定支付方式、升级套餐、开通特定服务等）可能需要账户关联 **Visa 或 Mastercard**。若国内银行卡无法完成验证，可参考作者实测的跨境虚拟卡开通方式：[虚拟信用卡实测与开卡指南](https://www.gsvps.com/articles/tutorials-2)。
 
 ## 界面预览
 
